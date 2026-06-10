@@ -33,6 +33,8 @@ public class BenefitServiceImpl implements BenefitService {
     private final AuditLogService auditLogService;
     private final MemberLevelMapper memberLevelMapper;
     private final RedissonClient redissonClient;
+    private final BudgetPoolService budgetPoolService;
+    private final RiskControlService riskControlService;
 
     @Override
     public List<Benefit> listActiveBenefits(Long memberId) {
@@ -133,6 +135,18 @@ public class BenefitServiceImpl implements BenefitService {
                 throw new BusinessException("可用积分不足");
             }
 
+            // 11.5 Budget pool check
+            if (request.getBudgetPoolId() != null) {
+                if (!riskControlService.isCircuitBreakerAllowing(request.getBudgetPoolId())) {
+                    throw new BusinessException("熔断器已开启，兑换被阻止");
+                }
+                BudgetPool pool = budgetPoolService.getPool(request.getBudgetPoolId());
+                if (!budgetPoolService.isPoolValidFor(pool, account.getLevelId())) {
+                    throw new BusinessException("预算池不适用于当前会员等级");
+                }
+                budgetPoolService.consumeBudget(request.getBudgetPoolId(), benefit.getPointsCost());
+            }
+
             // 12. Deduct points + Decrement stock (atomic within @Transactional)
             int rows = accountMapper.deductPoints(request.getMemberId(), benefit.getPointsCost());
             if (rows == 0) {
@@ -158,6 +172,7 @@ public class BenefitServiceImpl implements BenefitService {
                     .pointsCost(benefit.getPointsCost())
                     .status(1)
                     .bizOrderNo(request.getBizOrderNo())
+                    .budgetPoolId(request.getBudgetPoolId())
                     .createTime(LocalDateTime.now())
                     .updateTime(LocalDateTime.now())
                     .build();
@@ -240,6 +255,11 @@ public class BenefitServiceImpl implements BenefitService {
             // 7. Execute refund
             accountMapper.addPoints(record.getMemberId(), record.getPointsCost());
             benefitMapper.incrementStock(record.getBenefitId());
+
+            // 7.5 Restore budget to original pool
+            if (record.getBudgetPoolId() != null) {
+                budgetPoolService.restoreBudget(record.getBudgetPoolId(), record.getPointsCost());
+            }
 
             record.setStatus(3); // REFUNDED
             record.setRefundTime(LocalDateTime.now());

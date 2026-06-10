@@ -192,3 +192,109 @@ INSERT INTO benefit (benefit_name, benefit_type, points_cost, total_stock, avail
 ('50元优惠券',   'COUPON',      2000, 5000,  5000,  2, 1, 3),
 ('品牌定制礼品', 'PHYSICAL',    5000, 500,   500,   3, 0, 1),
 ('VIP月卡',      'VIP_SERVICE', 3000, 2000,  2000,  2, 1, 6);
+
+-- ============================================
+-- 积分预算池与活动风控
+-- ============================================
+
+-- 10. 预算池表
+CREATE TABLE budget_pool (
+    id                  BIGINT       NOT NULL AUTO_INCREMENT,
+    pool_name           VARCHAR(100) NOT NULL COMMENT '预算池名称',
+    total_budget        BIGINT       NOT NULL COMMENT '总预算(积分)',
+    used_budget         BIGINT       NOT NULL DEFAULT 0 COMMENT '已使用预算',
+    daily_cap           BIGINT       NOT NULL DEFAULT 0 COMMENT '每日发放上限(0不限)',
+    monthly_cap         BIGINT       NOT NULL DEFAULT 0 COMMENT '每月发放上限(0不限)',
+    daily_used          BIGINT       NOT NULL DEFAULT 0 COMMENT '今日已发放',
+    monthly_used        BIGINT       NOT NULL DEFAULT 0 COMMENT '本月已发放',
+    daily_reset_date    DATE         DEFAULT NULL COMMENT '日计数器重置日期',
+    monthly_reset_date  DATE         DEFAULT NULL COMMENT '月计数器重置日期',
+    applicable_levels   VARCHAR(255) DEFAULT NULL COMMENT '适用等级ID(JSON数组,如[1,2,3])',
+    status              TINYINT      NOT NULL DEFAULT 1 COMMENT '1活跃 2耗尽 3暂停 4过期',
+    start_time          DATETIME     NOT NULL COMMENT '生效开始时间',
+    end_time            DATETIME     NOT NULL COMMENT '生效结束时间',
+    create_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_status (status),
+    INDEX idx_time_range (start_time, end_time)
+) COMMENT='预算池';
+
+-- 11. 风控规则配置表
+CREATE TABLE risk_control_config (
+    id                  BIGINT       NOT NULL AUTO_INCREMENT,
+    pool_id             BIGINT       NOT NULL COMMENT '关联预算池ID',
+    rule_type           VARCHAR(50)  NOT NULL COMMENT 'HIGH_FREQUENCY/ABNORMAL_REFUND/BLACKLIST_HIT/BUDGET_EXHAUSTION',
+    threshold_value     VARCHAR(500) NOT NULL COMMENT '阈值配置(JSON)',
+    enabled             TINYINT      NOT NULL DEFAULT 1 COMMENT '1启用 0停用',
+    cooldown_minutes    INT          NOT NULL DEFAULT 30 COMMENT '熔断冷却时间(分钟)',
+    max_test_requests   INT          NOT NULL DEFAULT 10 COMMENT '半开状态最大试探次数',
+    create_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time         DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_pool_id (pool_id)
+) COMMENT='风控规则配置';
+
+-- 12. 风控事件表
+CREATE TABLE risk_event (
+    id            BIGINT       NOT NULL AUTO_INCREMENT,
+    pool_id       BIGINT       DEFAULT NULL COMMENT '关联预算池ID',
+    member_id     BIGINT       NOT NULL COMMENT '会员ID',
+    event_type    VARCHAR(50)  NOT NULL COMMENT '风控事件类型',
+    flow_id       BIGINT       DEFAULT NULL COMMENT '关联流水ID',
+    detail        TEXT         DEFAULT NULL COMMENT '详情(JSON)',
+    status        TINYINT      NOT NULL DEFAULT 1 COMMENT '1待处理 2已解决 3已忽略',
+    create_time   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    INDEX idx_pool_status (pool_id, status),
+    INDEX idx_member (member_id),
+    INDEX idx_create_time (create_time)
+) COMMENT='风控事件';
+
+-- 13. 熔断器表
+CREATE TABLE circuit_breaker (
+    id                BIGINT      NOT NULL AUTO_INCREMENT,
+    pool_id           BIGINT      NOT NULL COMMENT '关联预算池ID',
+    status            VARCHAR(20) NOT NULL DEFAULT 'CLOSED' COMMENT 'CLOSED/OPEN/HALF_OPEN',
+    failure_count     INT         NOT NULL DEFAULT 0 COMMENT '连续失败次数',
+    last_failure_time DATETIME    DEFAULT NULL COMMENT '最近失败时间',
+    last_state_change DATETIME    DEFAULT NULL COMMENT '最近状态变更时间',
+    cooldown_minutes  INT         NOT NULL DEFAULT 30 COMMENT '冷却时间(分钟)',
+    half_open_count   INT         NOT NULL DEFAULT 0 COMMENT '半开状态成功次数',
+    max_test_requests INT         NOT NULL DEFAULT 10 COMMENT '半开状态最大试探次数',
+    create_time       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME    NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_pool_id (pool_id)
+) COMMENT='熔断器';
+
+-- 14. 风控冻结工单表(人工复核)
+CREATE TABLE risk_freeze_order (
+    id               BIGINT       NOT NULL AUTO_INCREMENT,
+    freeze_order_no  VARCHAR(64)  NOT NULL COMMENT '冻结工单号',
+    pool_id          BIGINT       DEFAULT NULL COMMENT '关联预算池ID',
+    member_id        BIGINT       NOT NULL COMMENT '会员ID',
+    points_freeze_id BIGINT       DEFAULT NULL COMMENT '关联积分冻结记录ID',
+    risk_event_id    BIGINT       DEFAULT NULL COMMENT '关联风控事件ID',
+    freeze_type      VARCHAR(50)  NOT NULL COMMENT '冻结类型',
+    points           BIGINT       NOT NULL COMMENT '冻结积分',
+    review_status    TINYINT      NOT NULL DEFAULT 0 COMMENT '0待复核 1通过 2拒绝',
+    reviewer         VARCHAR(50)  DEFAULT NULL COMMENT '复核人',
+    review_remark    VARCHAR(500) DEFAULT NULL COMMENT '复核备注',
+    review_time      DATETIME     DEFAULT NULL COMMENT '复核时间',
+    expire_time      DATETIME     DEFAULT NULL COMMENT '自动释放时间',
+    create_time      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_freeze_order_no (freeze_order_no),
+    INDEX idx_review_status (review_status),
+    INDEX idx_expire_time (expire_time)
+) COMMENT='风控冻结工单';
+
+-- 扩展: 积分流水表增加预算池关联
+ALTER TABLE points_flow ADD COLUMN budget_pool_id BIGINT DEFAULT NULL COMMENT '关联预算池ID';
+ALTER TABLE points_flow ADD INDEX idx_budget_pool (budget_pool_id);
+
+-- 扩展: 兑换记录表增加预算池关联
+ALTER TABLE exchange_record ADD COLUMN budget_pool_id BIGINT DEFAULT NULL COMMENT '关联预算池ID';
+ALTER TABLE exchange_record ADD INDEX idx_budget_pool (budget_pool_id);

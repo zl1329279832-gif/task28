@@ -1,7 +1,14 @@
-C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\ConcurrentPointsTest.java
-C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\RuleEngineTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\CircuitBreakerServiceTest.java
 C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\BenefitServiceTest.java
 C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\PointsEventServiceTest.java
 C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\PointsFreezeServiceTest.java
 C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\PointsExpireTaskTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\RiskControlServiceTest.java
 C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\IdempotencyTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\ConcurrentPointsTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\BudgetPointsEventTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\BudgetRiskTaskTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\RuleEngineTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\RiskFreezeReviewServiceTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\BudgetPoolServiceTest.java
+C:\Users\13292\Desktop\claudel1\reposNew\task28\src\test\java\com\example\points\service\BudgetBenefitTest.java

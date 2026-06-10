@@ -16,6 +16,8 @@ import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
@@ -33,6 +35,8 @@ public class PointsEventServiceImpl implements PointsEventService {
     private final BlacklistService blacklistService;
     private final AuditLogService auditLogService;
     private final RedissonClient redissonClient;
+    private final BudgetPoolService budgetPoolService;
+    private final RiskControlService riskControlService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -40,6 +44,12 @@ public class PointsEventServiceImpl implements PointsEventService {
         // 1. Check blacklist
         if (blacklistService.isBlacklisted(request.getMemberId())) {
             throw new BusinessException("会员已被加入黑名单");
+        }
+
+        // 1.5 Circuit breaker pre-check
+        if (request.getBudgetPoolId() != null
+                && !riskControlService.isCircuitBreakerAllowing(request.getBudgetPoolId())) {
+            throw new BusinessException("熔断器已开启，积分发放被阻止");
         }
 
         // 2. Idempotent check before lock
@@ -74,7 +84,12 @@ public class PointsEventServiceImpl implements PointsEventService {
                 return null;
             }
 
-            // 7. Update account balance
+            // 7. Reserve budget (before account update)
+            if (request.getBudgetPoolId() != null && points > 0) {
+                budgetPoolService.reserveBudget(request.getBudgetPoolId(), points);
+            }
+
+            // 8. Update account balance
             int rows = accountMapper.addPoints(request.getMemberId(), points);
             if (rows == 0) {
                 throw new BusinessException("积分更新失败");
@@ -96,6 +111,7 @@ public class PointsEventServiceImpl implements PointsEventService {
                     .bizOrderNo(request.getBizOrderNo())
                     .expireTime(LocalDateTime.now().plusMonths(12))
                     .remark(request.getRemark())
+                    .budgetPoolId(request.getBudgetPoolId())
                     .createTime(LocalDateTime.now())
                     .build();
             flowService.saveFlow(flow);
@@ -104,6 +120,27 @@ public class PointsEventServiceImpl implements PointsEventService {
             auditLogService.log("POINTS", "EARN", String.valueOf(request.getMemberId()),
                     "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
                     "SYSTEM", null);
+
+            // 10. Post-commit risk evaluation
+            final Long budgetPoolId = request.getBudgetPoolId();
+            final long earnedPoints = points;
+            if (budgetPoolId != null
+                    && TransactionSynchronizationManager.isSynchronizationActive()) {
+                TransactionSynchronizationManager.registerSynchronization(
+                        new TransactionSynchronization() {
+                            @Override
+                            public void afterCommit() {
+                                try {
+                                    riskControlService.evaluatePostIssuance(
+                                            request.getMemberId(), budgetPoolId,
+                                            flow.getId(), earnedPoints);
+                                } catch (Exception e) {
+                                    log.error("Post-issuance risk evaluation failed, memberId={}, poolId={}",
+                                            request.getMemberId(), budgetPoolId, e);
+                                }
+                            }
+                        });
+            }
 
             log.info("Points event processed: memberId={}, eventType={}, points={}, eventId={}",
                     request.getMemberId(), request.getEventType(), points, request.getEventId());
@@ -272,6 +309,11 @@ public class PointsEventServiceImpl implements PointsEventService {
             auditLogService.log("POINTS", "REFUND", String.valueOf(request.getMemberId()),
                     "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
                     request.getOperator() != null ? request.getOperator() : "SYSTEM", null);
+
+            // Restore budget to original pool
+            if (originalFlow.getBudgetPoolId() != null) {
+                budgetPoolService.restoreBudget(originalFlow.getBudgetPoolId(), refundPoints);
+            }
 
             log.info("Points refunded: memberId={}, refundPoints={}, bizOrderNo={}",
                     request.getMemberId(), refundPoints, request.getBizOrderNo());

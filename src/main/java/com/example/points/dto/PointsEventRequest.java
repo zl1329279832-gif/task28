@@ -23,5 +23,7 @@ public class PointsEventRequest {
 
     private String activityCode;
 
+    private Long budgetPoolId;
+
     private String remark;
 }

@@ -48,6 +48,9 @@ public class PointsFlow {
     @TableField("remark")
     private String remark;
 
+    @TableField("budget_pool_id")
+    private Long budgetPoolId;
+
     @TableField("create_time")
     private LocalDateTime createTime;
 }
