@@ -168,6 +168,96 @@ CREATE TABLE audit_log (
     INDEX idx_create_time (create_time)
 ) COMMENT='审计日志';
 
+-- 10. 预算池表
+CREATE TABLE budget_pool (
+    id                BIGINT        NOT NULL AUTO_INCREMENT,
+    activity_code     VARCHAR(64)   NOT NULL COMMENT '活动代码',
+    activity_name     VARCHAR(100)  NOT NULL COMMENT '活动名称',
+    total_budget      BIGINT        NOT NULL COMMENT '预算总额(积分)',
+    used_budget       BIGINT        NOT NULL DEFAULT 0 COMMENT '已用额度',
+    frozen_budget     BIGINT        NOT NULL DEFAULT 0 COMMENT '冻结额度(风控冻结占用)',
+    applicable_levels VARCHAR(100)  DEFAULT NULL COMMENT '适用会员等级(逗号分隔,如1,2,3 NULL=全部)',
+    daily_limit       BIGINT        NOT NULL DEFAULT 0 COMMENT '日发放上限(0不限)',
+    monthly_limit     BIGINT        NOT NULL DEFAULT 0 COMMENT '月发放上限(0不限)',
+    risk_threshold    BIGINT        NOT NULL DEFAULT 0 COMMENT '风险阈值(单次发放超过此值触发风控)',
+    circuit_break_rate INT          NOT NULL DEFAULT 90 COMMENT '熔断比例(已用/总预算百分比)',
+    status            TINYINT       NOT NULL DEFAULT 1 COMMENT '1启用 0禁用 2已熔断',
+    effective_start   DATETIME      DEFAULT NULL COMMENT '生效开始时间',
+    effective_end     DATETIME      DEFAULT NULL COMMENT '生效结束时间',
+    create_time       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_activity_code (activity_code),
+    INDEX idx_status (status)
+) COMMENT='积分预算池';
+
+-- 11. 预算使用记录表
+CREATE TABLE budget_usage_log (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    pool_id         BIGINT       NOT NULL COMMENT '预算池ID',
+    member_id       BIGINT       NOT NULL COMMENT '会员ID',
+    event_id        VARCHAR(64)  NOT NULL COMMENT '关联事件ID(幂等)',
+    usage_type      VARCHAR(20)  NOT NULL COMMENT 'OCCUPY/RELEASE/REFUND',
+    points          BIGINT       NOT NULL COMMENT '占用/释放积分(正数)',
+    biz_order_no    VARCHAR(64)  DEFAULT NULL COMMENT '业务订单号',
+    remark          VARCHAR(255) DEFAULT NULL COMMENT '备注',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_event_id (event_id),
+    INDEX idx_pool_id (pool_id),
+    INDEX idx_member_id (member_id),
+    INDEX idx_create_time (create_time)
+) COMMENT='预算池使用记录';
+
+-- 12. 风控事件表
+CREATE TABLE risk_event (
+    id                BIGINT       NOT NULL AUTO_INCREMENT,
+    event_no          VARCHAR(64)  NOT NULL COMMENT '风控事件编号',
+    member_id         BIGINT       NOT NULL COMMENT '会员ID',
+    risk_type         VARCHAR(30)  NOT NULL COMMENT 'HIGH_FREQUENCY/ABNORMAL_REFUND/BLACKLIST_HIT/BUDGET_EXHAUSTED',
+    risk_detail       TEXT         DEFAULT NULL COMMENT '风险详情(JSON)',
+    related_flow_ids  VARCHAR(500) DEFAULT NULL COMMENT '关联积分流水ID(逗号分隔)',
+    related_freeze_no VARCHAR(64)  DEFAULT NULL COMMENT '关联冻结单号',
+    pool_id           BIGINT       DEFAULT NULL COMMENT '关联预算池ID',
+    status            TINYINT      NOT NULL DEFAULT 0 COMMENT '0待复核 1复核中 2已通过 3已拒绝',
+    create_time       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time       DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_event_no (event_no),
+    INDEX idx_member_id (member_id),
+    INDEX idx_status (status),
+    INDEX idx_risk_type (risk_type),
+    INDEX idx_create_time (create_time)
+) COMMENT='风控事件';
+
+-- 13. 人工复核单表
+CREATE TABLE review_order (
+    id              BIGINT       NOT NULL AUTO_INCREMENT,
+    review_no       VARCHAR(64)  NOT NULL COMMENT '复核单号',
+    risk_event_id   BIGINT       NOT NULL COMMENT '关联风控事件ID',
+    member_id       BIGINT       NOT NULL COMMENT '会员ID',
+    review_result   TINYINT      DEFAULT NULL COMMENT '1通过 2拒绝',
+    reviewer        VARCHAR(50)  DEFAULT NULL COMMENT '复核人',
+    review_comment  VARCHAR(500) DEFAULT NULL COMMENT '复核意见',
+    action_taken    VARCHAR(100) DEFAULT NULL COMMENT '执行动作(UNFREEZE/DEDUCT/ADD_BLACKLIST)',
+    review_time     DATETIME     DEFAULT NULL COMMENT '复核时间',
+    status          TINYINT      NOT NULL DEFAULT 0 COMMENT '0待复核 1已复核',
+    create_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    update_time     DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uk_review_no (review_no),
+    INDEX idx_risk_event_id (risk_event_id),
+    INDEX idx_status (status),
+    INDEX idx_reviewer (reviewer)
+) COMMENT='人工复核单';
+
+-- 积分流水表增加预算池关联
+ALTER TABLE points_flow ADD COLUMN pool_id BIGINT DEFAULT NULL COMMENT '关联预算池ID' AFTER rule_version;
+ALTER TABLE points_flow ADD INDEX idx_pool_id (pool_id);
+
+-- 兑换记录表增加预算池关联
+ALTER TABLE exchange_record ADD COLUMN pool_id BIGINT DEFAULT NULL COMMENT '关联预算池ID' AFTER biz_order_no;
+
 -- ============================================
 -- 初始化数据
 -- ============================================

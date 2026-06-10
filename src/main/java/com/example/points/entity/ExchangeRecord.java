@@ -33,6 +33,9 @@ public class ExchangeRecord {
     @TableField("biz_order_no")
     private String bizOrderNo;
 
+    @TableField("pool_id")
+    private Long poolId;
+
     @TableField("refund_time")
     private LocalDateTime refundTime;
 

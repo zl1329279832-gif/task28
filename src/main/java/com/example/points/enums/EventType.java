@@ -10,5 +10,6 @@ public enum EventType {
     UNFREEZE,
     REDEEM,
     REFUND,
-    EXPIRE
+    EXPIRE,
+    RISK_FREEZE
 }

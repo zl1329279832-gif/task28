@@ -47,6 +47,8 @@ class IdempotencyTest {
         @Mock private BlacklistService blacklistService;
         @Mock private AuditLogService auditLogService;
         @Mock private RedissonClient redissonClient;
+        @Mock private BudgetPoolService budgetPoolService;
+        @Mock private RiskControlService riskControlService;
         @Mock private RLock rLock;
 
         @BeforeEach
@@ -154,6 +156,7 @@ class IdempotencyTest {
         @Mock private AuditLogService auditLogService;
         @Mock private MemberLevelMapper memberLevelMapper;
         @Mock private RedissonClient redissonClient;
+        @Mock private BudgetPoolService budgetPoolService;
         @Mock private RLock rLock;
 
         @BeforeEach

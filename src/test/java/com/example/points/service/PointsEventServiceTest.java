@@ -39,6 +39,8 @@ class PointsEventServiceTest {
     @Mock private BlacklistService blacklistService;
     @Mock private AuditLogService auditLogService;
     @Mock private RedissonClient redissonClient;
+    @Mock private BudgetPoolService budgetPoolService;
+    @Mock private RiskControlService riskControlService;
     @Mock private RLock rLock;
     @Mock private RBucket<Object> rBucket;
 

@@ -18,4 +18,6 @@ public class RedeemRequest {
     private String eventId;
 
     private String bizOrderNo;
+
+    private String activityCode;
 }

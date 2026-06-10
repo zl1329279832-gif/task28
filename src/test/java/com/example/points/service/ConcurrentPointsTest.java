@@ -42,6 +42,8 @@ class ConcurrentPointsTest {
     @Mock private BlacklistService blacklistService;
     @Mock private AuditLogService auditLogService;
     @Mock private RedissonClient redissonClient;
+    @Mock private BudgetPoolService budgetPoolService;
+    @Mock private RiskControlService riskControlService;
     @Mock private RLock rLock;
 
     @BeforeEach

@@ -33,6 +33,7 @@ public class BenefitServiceImpl implements BenefitService {
     private final AuditLogService auditLogService;
     private final MemberLevelMapper memberLevelMapper;
     private final RedissonClient redissonClient;
+    private final BudgetPoolService budgetPoolService;
 
     @Override
     public List<Benefit> listActiveBenefits(Long memberId) {
@@ -149,6 +150,17 @@ public class BenefitServiceImpl implements BenefitService {
             long afterPoints = updatedAccount.getAvailablePoints();
             long beforePoints = afterPoints + benefit.getPointsCost();
 
+            // 12.5. Occupy budget pool if activity code is provided
+            Long poolId = null;
+            if (request.getActivityCode() != null && !request.getActivityCode().isEmpty()) {
+                BudgetPool pool = budgetPoolService.getActivePool(request.getActivityCode());
+                if (pool != null) {
+                    poolId = pool.getId();
+                    budgetPoolService.occupyBudget(poolId, request.getMemberId(),
+                            benefit.getPointsCost(), request.getEventId(), request.getBizOrderNo());
+                }
+            }
+
             // 13. Create exchange record
             String exchangeNo = "EX" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 6);
             ExchangeRecord record = ExchangeRecord.builder()
@@ -158,6 +170,7 @@ public class BenefitServiceImpl implements BenefitService {
                     .pointsCost(benefit.getPointsCost())
                     .status(1)
                     .bizOrderNo(request.getBizOrderNo())
+                    .poolId(poolId)
                     .createTime(LocalDateTime.now())
                     .updateTime(LocalDateTime.now())
                     .build();
@@ -171,6 +184,7 @@ public class BenefitServiceImpl implements BenefitService {
                     .pointsChange(-benefit.getPointsCost())
                     .beforePoints(beforePoints)
                     .afterPoints(afterPoints)
+                    .poolId(poolId)
                     .remark("兑换权益:" + benefit.getBenefitName())
                     .createTime(LocalDateTime.now())
                     .build();
@@ -240,6 +254,12 @@ public class BenefitServiceImpl implements BenefitService {
             // 7. Execute refund
             accountMapper.addPoints(record.getMemberId(), record.getPointsCost());
             benefitMapper.incrementStock(record.getBenefitId());
+
+            // 7.5. Release budget pool if applicable
+            if (record.getPoolId() != null) {
+                budgetPoolService.releaseBudget(record.getPoolId(), record.getMemberId(),
+                        record.getPointsCost(), eventId, bizOrderNo);
+            }
 
             record.setStatus(3); // REFUNDED
             record.setRefundTime(LocalDateTime.now());

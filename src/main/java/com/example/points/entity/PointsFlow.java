@@ -39,6 +39,9 @@ public class PointsFlow {
     @TableField("rule_version")
     private Integer ruleVersion;
 
+    @TableField("pool_id")
+    private Long poolId;
+
     @TableField("biz_order_no")
     private String bizOrderNo;
 

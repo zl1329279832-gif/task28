@@ -9,6 +9,8 @@ import com.example.points.entity.PointsAccount;
 import com.example.points.entity.PointsFlow;
 import com.example.points.mapper.PointsAccountMapper;
 import com.example.points.mapper.PointsFlowMapper;
+import com.example.points.entity.BudgetPool;
+import com.example.points.entity.RiskEvent;
 import com.example.points.service.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +35,8 @@ public class PointsEventServiceImpl implements PointsEventService {
     private final BlacklistService blacklistService;
     private final AuditLogService auditLogService;
     private final RedissonClient redissonClient;
+    private final BudgetPoolService budgetPoolService;
+    private final RiskControlService riskControlService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -74,6 +78,22 @@ public class PointsEventServiceImpl implements PointsEventService {
                 return null;
             }
 
+            // 6.5. Budget pool & risk control
+            BudgetPool pool = budgetPoolService.getActivePool(request.getActivityCode());
+            Long poolId = null;
+            if (pool != null) {
+                poolId = pool.getId();
+                // Risk control check
+                RiskEvent riskEvent = riskControlService.checkBeforeEarn(
+                        request.getMemberId(), points, poolId);
+                if (riskEvent != null) {
+                    throw new BusinessException("风控拦截: " + riskEvent.getEventNo());
+                }
+                // Occupy budget
+                budgetPoolService.occupyBudget(poolId, request.getMemberId(), points,
+                        request.getEventId(), request.getBizOrderNo());
+            }
+
             // 7. Update account balance
             int rows = accountMapper.addPoints(request.getMemberId(), points);
             if (rows == 0) {
@@ -93,6 +113,7 @@ public class PointsEventServiceImpl implements PointsEventService {
                     .pointsChange(points)
                     .beforePoints(beforePoints)
                     .afterPoints(afterPoints)
+                    .poolId(poolId)
                     .bizOrderNo(request.getBizOrderNo())
                     .expireTime(LocalDateTime.now().plusMonths(12))
                     .remark(request.getRemark())
@@ -228,6 +249,13 @@ public class PointsEventServiceImpl implements PointsEventService {
             throw new BusinessException("退款积分计算结果为0");
         }
 
+        // 2.5. Risk control check for refund
+        RiskEvent riskEvent = riskControlService.checkBeforeRefund(
+                request.getMemberId(), request.getBizOrderNo());
+        if (riskEvent != null) {
+            throw new BusinessException("退款风控拦截: " + riskEvent.getEventNo());
+        }
+
         // 3. Acquire lock
         String lockKey = "lock:points:event:" + request.getMemberId();
         RLock lock = redissonClient.getLock(lockKey);
@@ -268,6 +296,13 @@ public class PointsEventServiceImpl implements PointsEventService {
                     .createTime(LocalDateTime.now())
                     .build();
             flowService.saveFlow(flow);
+
+            // 5.5. Release budget if original flow had pool
+            if (originalFlow.getPoolId() != null) {
+                budgetPoolService.releaseBudget(originalFlow.getPoolId(),
+                        request.getMemberId(), refundPoints,
+                        request.getEventId(), request.getBizOrderNo());
+            }
 
             auditLogService.log("POINTS", "REFUND", String.valueOf(request.getMemberId()),
                     "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
