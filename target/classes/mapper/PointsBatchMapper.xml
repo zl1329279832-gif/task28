@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.membership.points.mapper.PointsBatchMapper">
+
+    <select id="selectExpiredBatches" resultType="com.membership.points.entity.PointsBatch">
+        SELECT * FROM points_batch
+        WHERE expired = 0
+          AND remaining_points &gt; 0
+          AND expire_at &lt;= #{now}
+        ORDER BY expire_at ASC
+        LIMIT #{limit}
+    </select>
+
+</mapper>

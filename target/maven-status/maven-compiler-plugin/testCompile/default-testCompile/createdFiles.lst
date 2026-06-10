@@ -1,0 +1,8 @@
+com\membership\points\MembershipPointsApplicationTests.class
+com\membership\points\service\RedemptionServiceTest.class
+com\membership\points\service\PointsEarnServiceTest.class
+com\membership\points\service\PointsExpirationServiceTest.class
+com\membership\points\controller\PointsControllerTest.class
+com\membership\points\service\IdempotentServiceTest.class
+com\membership\points\service\RefundServiceTest.class
+com\membership\points\concurrent\RedemptionConcurrencyTest.class

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.membership.points.mapper.PointsTransactionMapper">
+
+    <select id="sumEarnedPointsByMonth" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(points_amount), 0)
+        FROM points_transaction
+        WHERE member_id = #{memberId}
+          AND source = #{source}
+          AND transaction_type = 'EARN'
+          AND created_at &gt;= #{startOfMonth}
+          AND created_at &lt; #{endOfMonth}
+    </select>
+
+    <select id="sumEarnedPointsLast12Months" resultType="java.lang.Long">
+        SELECT COALESCE(SUM(points_amount), 0)
+        FROM points_transaction
+        WHERE member_id = #{memberId}
+          AND transaction_type = 'EARN'
+          AND created_at &gt;= #{since}
+    </select>
+
+</mapper>
