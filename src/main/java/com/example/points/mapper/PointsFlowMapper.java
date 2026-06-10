@@ -20,4 +20,8 @@ public interface PointsFlowMapper extends BaseMapper<PointsFlow> {
             "AND event_type = 'REDEEM' AND remark LIKE CONCAT('%', #{benefitId}, '%') " +
             "AND DATE(create_time) = CURDATE()")
     int countDailyExchange(@Param("memberId") Long memberId, @Param("benefitId") Long benefitId);
+
+    @Select("SELECT COALESCE(SUM(points_change), 0) FROM points_flow " +
+            "WHERE biz_order_no = #{bizOrderNo} AND member_id = #{memberId} AND event_type = 'REFUND'")
+    Long sumRefundedPoints(@Param("bizOrderNo") String bizOrderNo, @Param("memberId") Long memberId);
 }

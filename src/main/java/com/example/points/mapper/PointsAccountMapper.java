@@ -40,6 +40,10 @@ public interface PointsAccountMapper extends BaseMapper<PointsAccount> {
             "update_time = NOW() WHERE member_id = #{memberId} AND available_points >= #{points}")
     int expirePoints(@Param("memberId") Long memberId, @Param("points") Long points);
 
+    @Update("UPDATE points_account SET available_points = available_points + #{points}, " +
+            "update_time = NOW() WHERE member_id = #{memberId} AND status = 1")
+    int refundPoints(@Param("memberId") Long memberId, @Param("points") Long points);
+
     @Update("UPDATE points_account SET monthly_earned = 0, monthly_reset_date = #{resetDate} " +
             "WHERE monthly_reset_date IS NULL OR monthly_reset_date < #{resetDate}")
     int resetMonthlyEarned(@Param("resetDate") LocalDate resetDate);

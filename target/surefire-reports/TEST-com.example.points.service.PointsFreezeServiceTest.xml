@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" name="com.example.points.service.RuleEngineTest" time="0.243" tests="4" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" name="com.example.points.service.PointsFreezeServiceTest" time="0.076" tests="11" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="17"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -58,8 +58,15 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="61.0"/>
   </properties>
-  <testcase name="testCalculatePoints_Purchase" classname="com.example.points.service.RuleEngineTest" time="0.233"/>
-  <testcase name="testCalculatePoints_Register" classname="com.example.points.service.RuleEngineTest" time="0.003"/>
-  <testcase name="testCalculatePoints_PurchaseBelowMinAmount" classname="com.example.points.service.RuleEngineTest" time="0.002"/>
-  <testcase name="testCalculatePoints_MonthlyCap" classname="com.example.points.service.RuleEngineTest" time="0.001"/>
+  <testcase name="testUnfreeze_Success_UsesCAS" classname="com.example.points.service.PointsFreezeServiceTest" time="0.006"/>
+  <testcase name="testFreeze_Duplicate_ReturnsExisting" classname="com.example.points.service.PointsFreezeServiceTest" time="0.004"/>
+  <testcase name="testSettleFreeze_Success_UsesCAS" classname="com.example.points.service.PointsFreezeServiceTest" time="0.01"/>
+  <testcase name="testSettleFreeze_NotFrozen_ThrowsException" classname="com.example.points.service.PointsFreezeServiceTest" time="0.004"/>
+  <testcase name="testUnfreeze_NotFrozen_ThrowsException" classname="com.example.points.service.PointsFreezeServiceTest" time="0.004"/>
+  <testcase name="testFreeze_InsufficientPoints_ThrowsException" classname="com.example.points.service.PointsFreezeServiceTest" time="0.007"/>
+  <testcase name="testFreeze_Blacklisted_ThrowsException" classname="com.example.points.service.PointsFreezeServiceTest" time="0.006"/>
+  <testcase name="testSettleFreeze_CASFails_AlreadyProcessed" classname="com.example.points.service.PointsFreezeServiceTest" time="0.003"/>
+  <testcase name="testUnfreeze_CASFails_AlreadyProcessed" classname="com.example.points.service.PointsFreezeServiceTest" time="0.003"/>
+  <testcase name="testFreeze_Success" classname="com.example.points.service.PointsFreezeServiceTest" time="0.012"/>
+  <testcase name="testSettleFreeze_FreezeNotFound_ThrowsException" classname="com.example.points.service.PointsFreezeServiceTest" time="0.004"/>
 </testsuite>

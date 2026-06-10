@@ -1,3 +1,5 @@
-com\example\points\service\PointsEventServiceTest.class
 com\example\points\service\RuleEngineTest.class
 com\example\points\service\BenefitServiceTest.class
+com\example\points\service\PointsEventServiceTest.class
+com\example\points\service\PointsFreezeServiceTest.class
+com\example\points\scheduled\PointsExpireTaskTest.class

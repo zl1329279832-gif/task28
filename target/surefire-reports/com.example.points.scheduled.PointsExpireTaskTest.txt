@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: com.example.points.scheduled.PointsExpireTaskTest
+-------------------------------------------------------------------------------
+Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.798 s - in com.example.points.scheduled.PointsExpireTaskTest

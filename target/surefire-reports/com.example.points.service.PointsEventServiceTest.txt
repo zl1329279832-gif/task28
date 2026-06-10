@@ -1,4 +1,4 @@
 -------------------------------------------------------------------------------
 Test set: com.example.points.service.PointsEventServiceTest
 -------------------------------------------------------------------------------
-Tests run: 6, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.139 s - in com.example.points.service.PointsEventServiceTest
+Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.094 s - in com.example.points.service.PointsEventServiceTest
