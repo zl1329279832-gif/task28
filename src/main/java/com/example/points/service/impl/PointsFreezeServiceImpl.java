@@ -11,6 +11,7 @@ import com.example.points.mapper.PointsAccountMapper;
 import com.example.points.mapper.PointsFreezeMapper;
 import com.example.points.service.AuditLogService;
 import com.example.points.service.BlacklistService;
+import com.example.points.service.PointsAccountService;
 import com.example.points.service.PointsFlowService;
 import com.example.points.service.PointsFreezeService;
 import lombok.RequiredArgsConstructor;
@@ -34,6 +35,7 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
     private final PointsFlowService pointsFlowService;
     private final BlacklistService blacklistService;
     private final AuditLogService auditLogService;
+    private final PointsAccountService accountService;
     private final RedissonClient redissonClient;
 
     @Override
@@ -67,15 +69,8 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 return existingFreezes.get(0);
             }
 
-            // Get account for before/after tracking
-            LambdaQueryWrapper<PointsAccount> accountWrapper = new LambdaQueryWrapper<>();
-            accountWrapper.eq(PointsAccount::getMemberId, request.getMemberId());
-            PointsAccount account = pointsAccountMapper.selectOne(accountWrapper);
-            if (account == null) {
-                throw new BusinessException("积分账户不存在");
-            }
-
-            long beforePoints = account.getAvailablePoints();
+            // Get account for existence check
+            PointsAccount account = accountService.getAccount(request.getMemberId());
 
             // 4. Freeze points
             int rows = pointsAccountMapper.freezePoints(request.getMemberId(), request.getPoints());
@@ -83,7 +78,10 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 throw new BusinessException("可用积分不足，无法冻结 " + request.getPoints() + " 积分");
             }
 
-            long afterPoints = beforePoints - request.getPoints();
+            // Re-read account AFTER freezePoints for accurate flow values
+            PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(request.getMemberId());
+            long afterPoints = updatedAccount.getAvailablePoints();
+            long beforePoints = afterPoints + request.getPoints();
 
             // 5. Create PointsFreeze record
             int freezeHours = request.getFreezeHours() != null ? request.getFreezeHours() : 72;
@@ -154,18 +152,16 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 return;
             }
 
-            LambdaQueryWrapper<PointsAccount> accountWrapper = new LambdaQueryWrapper<>();
-            accountWrapper.eq(PointsAccount::getMemberId, freeze.getMemberId());
-            PointsAccount account = pointsAccountMapper.selectOne(accountWrapper);
-            long beforePoints = account.getAvailablePoints();
-
             // 3. Unfreeze points
             int rows = pointsAccountMapper.unfreezePoints(freeze.getMemberId(), freeze.getPoints());
             if (rows == 0) {
                 throw new BusinessException("解冻积分失败");
             }
 
-            long afterPoints = beforePoints + freeze.getPoints();
+            // Re-read account AFTER unfreezePoints for accurate flow values
+            PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(freeze.getMemberId());
+            long afterPoints = updatedAccount.getAvailablePoints();
+            long beforePoints = afterPoints - freeze.getPoints();
 
             // 4. Update freeze status to UNFROZEN
             freeze.setStatus(FreezeStatus.UNFROZEN.getCode());
@@ -225,18 +221,16 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 return;
             }
 
-            LambdaQueryWrapper<PointsAccount> accountWrapper = new LambdaQueryWrapper<>();
-            accountWrapper.eq(PointsAccount::getMemberId, freeze.getMemberId());
-            PointsAccount account = pointsAccountMapper.selectOne(accountWrapper);
-            long beforeFrozen = account.getFrozenPoints();
-
             // 3. Deduct frozen points (order confirmed)
             int rows = pointsAccountMapper.deductFrozenPoints(freeze.getMemberId(), freeze.getPoints());
             if (rows == 0) {
                 throw new BusinessException("扣减冻结积分失败");
             }
 
-            long afterFrozen = beforeFrozen - freeze.getPoints();
+            // Re-read account AFTER deductFrozenPoints for accurate flow values
+            PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(freeze.getMemberId());
+            long afterFrozen = updatedAccount.getFrozenPoints();
+            long beforeFrozen = afterFrozen + freeze.getPoints();
 
             // 4. Update freeze status to DEDUCTED
             freeze.setStatus(FreezeStatus.DEDUCTED.getCode());

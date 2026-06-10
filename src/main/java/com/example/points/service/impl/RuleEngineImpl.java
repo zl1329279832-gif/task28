@@ -178,6 +178,24 @@ public class RuleEngineImpl implements RuleEngine {
                .orderByDesc(PointsRule::getPriority);
         List<PointsRule> rules = ruleMapper.selectList(wrapper);
 
+        // Fallback: if no active rules found, load latest versions of all rules
+        if (rules == null || rules.isEmpty()) {
+            log.warn("No active rules found in DB, attempting fallback to latest rule versions");
+            LambdaQueryWrapper<PointsRule> fallbackWrapper = new LambdaQueryWrapper<>();
+            fallbackWrapper.orderByDesc(PointsRule::getVersion);
+            List<PointsRule> allRules = ruleMapper.selectList(fallbackWrapper);
+            if (allRules != null && !allRules.isEmpty()) {
+                rules = new java.util.ArrayList<>(allRules.stream()
+                        .collect(java.util.stream.Collectors.toMap(
+                                PointsRule::getRuleCode,
+                                r -> r,
+                                (r1, r2) -> r1.getVersion() >= r2.getVersion() ? r1 : r2
+                        ))
+                        .values());
+                log.warn("Fallback loaded {} rules from {} total", rules.size(), allRules.size());
+            }
+        }
+
         // Cache for 10 minutes
         if (rules != null && !rules.isEmpty()) {
             bucket.set(rules, Duration.ofMinutes(10));

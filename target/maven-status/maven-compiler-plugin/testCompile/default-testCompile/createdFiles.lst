@@ -1,3 +1,9 @@
-com\example\points\service\PointsEventServiceTest.class
 com\example\points\service\RuleEngineTest.class
+com\example\points\service\PointsExpireTaskTest.class
+com\example\points\service\PointsEventServiceTest.class
 com\example\points\service\BenefitServiceTest.class
+com\example\points\service\PointsFreezeServiceTest.class
+com\example\points\service\IdempotencyTest$BenefitIdempotency.class
+com\example\points\service\IdempotencyTest$PointsEventIdempotency.class
+com\example\points\service\ConcurrentPointsTest.class
+com\example\points\service\IdempotencyTest.class

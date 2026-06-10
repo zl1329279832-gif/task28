@@ -3,11 +3,15 @@ package com.example.points.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.example.points.entity.PointsAccount;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDate;
 
 public interface PointsAccountMapper extends BaseMapper<PointsAccount> {
+
+    @Select("SELECT * FROM points_account WHERE member_id = #{memberId}")
+    PointsAccount selectByMemberId(@Param("memberId") Long memberId);
 
     @Update("UPDATE points_account SET available_points = available_points + #{points}, " +
             "total_earned = total_earned + #{points}, " +

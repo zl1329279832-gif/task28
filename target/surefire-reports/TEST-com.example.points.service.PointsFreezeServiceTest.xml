@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" name="com.example.points.service.BenefitServiceTest" time="3.172" tests="12" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" name="com.example.points.service.PointsFreezeServiceTest" time="0.096" tests="15" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="17"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -58,16 +58,19 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="61.0"/>
   </properties>
-  <testcase name="testRedeem_StockExhausted_RollsBack" classname="com.example.points.service.BenefitServiceTest" time="2.531"/>
-  <testcase name="testRedeem_InsufficientPoints" classname="com.example.points.service.BenefitServiceTest" time="0.015"/>
-  <testcase name="testRefundExchange_LockNotAcquired_ThrowsException" classname="com.example.points.service.BenefitServiceTest" time="0.086"/>
-  <testcase name="testRefundExchange_DoubleRefundPrevented" classname="com.example.points.service.BenefitServiceTest" time="0.007"/>
-  <testcase name="testRefundExchange_AlreadyRefunded_Noop" classname="com.example.points.service.BenefitServiceTest" time="0.011"/>
-  <testcase name="testRedeem_Success" classname="com.example.points.service.BenefitServiceTest" time="0.416"/>
-  <testcase name="testRedeem_Blacklisted_ThrowsException" classname="com.example.points.service.BenefitServiceTest" time="0.008"/>
-  <testcase name="testRedeem_DuplicateEventId_ReturnsExistingRecord" classname="com.example.points.service.BenefitServiceTest" time="0.007"/>
-  <testcase name="testRefundExchange_NoExchangeRecord_ThrowsException" classname="com.example.points.service.BenefitServiceTest" time="0.005"/>
-  <testcase name="testRedeem_DailyLimitExceeded" classname="com.example.points.service.BenefitServiceTest" time="0.006"/>
-  <testcase name="testRefundExchange_Success" classname="com.example.points.service.BenefitServiceTest" time="0.015"/>
-  <testcase name="testRefundExchange_IdempotentByEventId" classname="com.example.points.service.BenefitServiceTest" time="0.005"/>
+  <testcase name="testFreeze_Blacklisted" classname="com.example.points.service.PointsFreezeServiceTest" time="0"/>
+  <testcase name="testUnfreeze_AccurateBeforeAfterPoints" classname="com.example.points.service.PointsFreezeServiceTest" time="0"/>
+  <testcase name="testFreeze_DuplicateFreezeNo_ReturnsExisting" classname="com.example.points.service.PointsFreezeServiceTest" time="0"/>
+  <testcase name="testUnfreeze_Success" classname="com.example.points.service.PointsFreezeServiceTest" time="0.003"/>
+  <testcase name="testFreeze_AccountNotExists" classname="com.example.points.service.PointsFreezeServiceTest" time="0.005"/>
+  <testcase name="testSettleFreeze_AlreadySettled_Noop" classname="com.example.points.service.PointsFreezeServiceTest" time="0.014"/>
+  <testcase name="testFreeze_LockNotAcquired" classname="com.example.points.service.PointsFreezeServiceTest" time="0.004"/>
+  <testcase name="testFreeze_Success" classname="com.example.points.service.PointsFreezeServiceTest" time="0.005"/>
+  <testcase name="testSettleFreeze_Success" classname="com.example.points.service.PointsFreezeServiceTest" time="0.006"/>
+  <testcase name="testUnfreeze_AlreadyUnfrozen_Noop" classname="com.example.points.service.PointsFreezeServiceTest" time="0.002"/>
+  <testcase name="testSettleFreeze_DeductFrozenFails" classname="com.example.points.service.PointsFreezeServiceTest" time="0.003"/>
+  <testcase name="testUnfreeze_FreezeNotFound" classname="com.example.points.service.PointsFreezeServiceTest" time="0.021"/>
+  <testcase name="testSettleFreeze_AccurateBeforeAfterFrozenPoints" classname="com.example.points.service.PointsFreezeServiceTest" time="0.003"/>
+  <testcase name="testFreeze_AccurateBeforeAfterPoints" classname="com.example.points.service.PointsFreezeServiceTest" time="0.004"/>
+  <testcase name="testFreeze_InsufficientPoints" classname="com.example.points.service.PointsFreezeServiceTest" time="0.012"/>
 </testsuite>

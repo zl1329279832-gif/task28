@@ -62,12 +62,7 @@ public class RuleServiceImpl implements RuleService {
 
         String beforeValue = existingRule.toString();
 
-        // 2. Set old version status=0 (disabled)
-        existingRule.setStatus(0);
-        existingRule.setUpdateTime(LocalDateTime.now());
-        pointsRuleMapper.updateById(existingRule);
-
-        // 3. Create new version: copy rule, increment version, apply updates
+        // 2. Create new version FIRST (avoids gap with no active rules)
         PointsRule newRule = PointsRule.builder()
                 .ruleCode(existingRule.getRuleCode())
                 .ruleName(request.getRuleName() != null ? request.getRuleName() : existingRule.getRuleName())
@@ -84,8 +79,15 @@ public class RuleServiceImpl implements RuleService {
                 .build();
         pointsRuleMapper.insert(newRule);
 
-        // 4. Invalidate rules cache
+        // 3. Invalidate rules cache
         invalidateRulesCache();
+
+        // 4. Disable old version LAST (only if new rule is active to avoid zero active rules)
+        if (newRule.getStatus() == 1) {
+            existingRule.setStatus(0);
+            existingRule.setUpdateTime(LocalDateTime.now());
+            pointsRuleMapper.updateById(existingRule);
+        }
 
         // 5. Log audit with before/after values
         String afterValue = newRule.toString();

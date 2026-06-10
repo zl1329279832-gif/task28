@@ -53,10 +53,17 @@ public class BenefitServiceImpl implements BenefitService {
             throw new BusinessException("会员已被加入黑名单");
         }
 
-        // 2. Idempotent check
+        // 2. Idempotent check - return existing record instead of throwing
         PointsFlow existingFlow = flowService.checkIdempotent(request.getEventId());
         if (existingFlow != null) {
-            throw new BusinessException("重复兑换请求");
+            log.info("Redeem event already processed, eventId={}", request.getEventId());
+            LambdaQueryWrapper<ExchangeRecord> recordWrapper = new LambdaQueryWrapper<>();
+            recordWrapper.eq(ExchangeRecord::getMemberId, request.getMemberId())
+                       .eq(ExchangeRecord::getBenefitId, request.getBenefitId())
+                       .eq(ExchangeRecord::getStatus, 1)
+                       .orderByDesc(ExchangeRecord::getCreateTime)
+                       .last("LIMIT 1");
+            return exchangeRecordMapper.selectOne(recordWrapper);
         }
 
         // 3. Acquire distributed lock
@@ -137,6 +144,11 @@ public class BenefitServiceImpl implements BenefitService {
                 // @Transactional rollback restores the deducted points
             }
 
+            // Re-read account AFTER deduction for accurate flow values
+            PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
+            long afterPoints = updatedAccount.getAvailablePoints();
+            long beforePoints = afterPoints + benefit.getPointsCost();
+
             // 13. Create exchange record
             String exchangeNo = "EX" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 6);
             ExchangeRecord record = ExchangeRecord.builder()
@@ -157,16 +169,16 @@ public class BenefitServiceImpl implements BenefitService {
                     .eventId(request.getEventId())
                     .eventType("REDEEM")
                     .pointsChange(-benefit.getPointsCost())
-                    .beforePoints(account.getAvailablePoints())
-                    .afterPoints(account.getAvailablePoints() - benefit.getPointsCost())
+                    .beforePoints(beforePoints)
+                    .afterPoints(afterPoints)
                     .remark("兑换权益:" + benefit.getBenefitName())
                     .createTime(LocalDateTime.now())
                     .build();
             flowService.saveFlow(flow);
 
             auditLogService.log("BENEFIT", "REDEEM", String.valueOf(request.getMemberId()),
-                    "MEMBER", String.valueOf(account.getAvailablePoints()),
-                    String.valueOf(account.getAvailablePoints() - benefit.getPointsCost()),
+                    "MEMBER", String.valueOf(beforePoints),
+                    String.valueOf(afterPoints),
                     "SYSTEM", null);
 
             return record;
@@ -183,7 +195,14 @@ public class BenefitServiceImpl implements BenefitService {
     @Override
     @Transactional(rollbackFor = Exception.class)
     public void refundExchange(String bizOrderNo, String eventId, String operator) {
-        // Find exchange record
+        // 1. Idempotency check BEFORE lock
+        PointsFlow existingFlow = flowService.checkIdempotent(eventId);
+        if (existingFlow != null) {
+            log.info("Refund exchange already processed, eventId={}", eventId);
+            return;
+        }
+
+        // 2. Find exchange record
         LambdaQueryWrapper<ExchangeRecord> wrapper = new LambdaQueryWrapper<>();
         wrapper.eq(ExchangeRecord::getBizOrderNo, bizOrderNo)
                .last("LIMIT 1");
@@ -192,19 +211,74 @@ public class BenefitServiceImpl implements BenefitService {
             throw new BusinessException("兑换记录不存在");
         }
 
-        // Refund points
-        accountMapper.addPoints(record.getMemberId(), record.getPointsCost());
+        // 3. Check if already refunded
+        if (record.getStatus() == 3) { // REFUNDED
+            log.info("Exchange already refunded, bizOrderNo={}", bizOrderNo);
+            return;
+        }
 
-        // Restore stock
-        benefitMapper.incrementStock(record.getBenefitId());
+        // 4. Acquire distributed lock
+        String lockKey = "lock:benefit:refund:" + record.getMemberId();
+        RLock lock = redissonClient.getLock(lockKey);
+        try {
+            if (!lock.tryLock(5, 30, TimeUnit.SECONDS)) {
+                throw new BusinessException("系统繁忙，请稍后重试");
+            }
 
-        // Update record status to REFUNDED (3)
-        record.setStatus(3);
-        record.setRefundTime(LocalDateTime.now());
-        record.setUpdateTime(LocalDateTime.now());
-        exchangeRecordMapper.updateById(record);
+            // 5. Double-check idempotency inside lock
+            existingFlow = flowService.checkIdempotent(eventId);
+            if (existingFlow != null) {
+                return;
+            }
 
-        auditLogService.log("BENEFIT", "REFUND_EXCHANGE", String.valueOf(record.getId()),
-                "EXCHANGE_RECORD", "1", "3", operator, "");
+            // 6. Re-check status inside lock
+            record = exchangeRecordMapper.selectOne(wrapper);
+            if (record.getStatus() == 3) { // REFUNDED
+                return;
+            }
+
+            // 7. Execute refund
+            accountMapper.addPoints(record.getMemberId(), record.getPointsCost());
+            benefitMapper.incrementStock(record.getBenefitId());
+
+            record.setStatus(3); // REFUNDED
+            record.setRefundTime(LocalDateTime.now());
+            record.setUpdateTime(LocalDateTime.now());
+            exchangeRecordMapper.updateById(record);
+
+            // 8. Re-read account for accurate flow
+            PointsAccount updatedAccount = accountMapper.selectByMemberId(record.getMemberId());
+            long afterPoints = updatedAccount.getAvailablePoints();
+            long beforePoints = afterPoints - record.getPointsCost();
+
+            // 9. Create refund flow record
+            PointsFlow flow = PointsFlow.builder()
+                    .memberId(record.getMemberId())
+                    .eventId(eventId)
+                    .eventType("REFUND")
+                    .pointsChange(record.getPointsCost())
+                    .beforePoints(beforePoints)
+                    .afterPoints(afterPoints)
+                    .bizOrderNo(bizOrderNo)
+                    .remark("权益退款: " + bizOrderNo)
+                    .createTime(LocalDateTime.now())
+                    .build();
+            flowService.saveFlow(flow);
+
+            // 10. Audit log
+            auditLogService.log("BENEFIT", "REFUND_EXCHANGE", String.valueOf(record.getId()),
+                    "EXCHANGE_RECORD", String.valueOf(beforePoints), String.valueOf(afterPoints),
+                    operator, "");
+
+            log.info("Refund exchange completed: bizOrderNo={}, memberId={}, refundPoints={}",
+                    bizOrderNo, record.getMemberId(), record.getPointsCost());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new BusinessException("系统繁忙，请稍后重试");
+        } finally {
+            if (lock.isHeldByCurrentThread()) {
+                lock.unlock();
+            }
+        }
     }
 }
