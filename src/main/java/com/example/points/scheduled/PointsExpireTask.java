@@ -39,6 +39,7 @@ public class PointsExpireTask {
     private final PointsFlowService flowService;
     private final RedissonClient redissonClient;
     private final TransactionTemplate transactionTemplate;
+    private final com.example.points.service.BudgetPoolService budgetPoolService;
 
     /**
      * Expire points: run at 2 AM daily.
@@ -260,6 +261,13 @@ public class PointsExpireTask {
                 freshFreeze.setStatus(FreezeStatus.EXPIRED.getCode());
                 freshFreeze.setUpdateTime(LocalDateTime.now());
                 pointsFreezeMapper.updateById(freshFreeze);
+
+                // Unfreeze corresponding budget if linked to a budget pool
+                if (freshFreeze.getBudgetPoolId() != null && freshFreeze.getBudgetAmount() != null) {
+                    budgetPoolService.unfreezeBudget(freshFreeze.getBudgetPoolId(), freshFreeze.getBudgetAmount());
+                    log.info("Budget unfrozen on auto-unfreeze: poolId={}, amount={}",
+                            freshFreeze.getBudgetPoolId(), freshFreeze.getBudgetAmount());
+                }
 
                 // Re-read account AFTER update for accurate flow values
                 PointsAccount account = pointsAccountMapper.selectByMemberId(freeze.getMemberId());

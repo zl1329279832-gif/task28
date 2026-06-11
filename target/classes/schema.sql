@@ -298,3 +298,22 @@ ALTER TABLE points_flow ADD INDEX idx_budget_pool (budget_pool_id);
 -- 扩展: 兑换记录表增加预算池关联
 ALTER TABLE exchange_record ADD COLUMN budget_pool_id BIGINT DEFAULT NULL COMMENT '关联预算池ID';
 ALTER TABLE exchange_record ADD INDEX idx_budget_pool (budget_pool_id);
+
+-- ============================================
+-- 事务一致性修复: 预算冻结、熔断标记、冻结关联、幂等键
+-- ============================================
+
+-- Fix: Track frozen budget separately from consumed budget
+ALTER TABLE budget_pool ADD COLUMN frozen_budget BIGINT NOT NULL DEFAULT 0 COMMENT '冻结中预算';
+
+-- Fix: Track whether budget was released when breaker tripped
+ALTER TABLE circuit_breaker ADD COLUMN budget_released TINYINT NOT NULL DEFAULT 0 COMMENT '熔断时是否已释放预算 0否 1是';
+
+-- Fix: Link freeze records to originating budget pool
+ALTER TABLE points_freeze ADD COLUMN budget_pool_id BIGINT DEFAULT NULL COMMENT '关联预算池ID';
+ALTER TABLE points_freeze ADD COLUMN budget_amount BIGINT DEFAULT NULL COMMENT '关联冻结预算金额';
+ALTER TABLE points_freeze ADD INDEX idx_budget_pool (budget_pool_id);
+
+-- Fix: Prevent duplicate risk events via idempotent key
+ALTER TABLE risk_event ADD COLUMN idempotent_key VARCHAR(128) DEFAULT NULL COMMENT '幂等键';
+ALTER TABLE risk_event ADD UNIQUE INDEX uk_idempotent_key (idempotent_key);

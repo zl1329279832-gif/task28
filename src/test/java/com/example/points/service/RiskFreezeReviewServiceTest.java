@@ -150,4 +150,38 @@ class RiskFreezeReviewServiceTest {
         when(riskFreezeOrderMapper.selectById(999L)).thenReturn(null);
         assertThrows(BusinessException.class, () -> riskFreezeReviewService.getReview(999L));
     }
+
+    @Test
+    void testCreateRiskFreeze_WithPoolId_UsesFreezeWithBudget() {
+        PointsFreeze freeze = new PointsFreeze();
+        freeze.setId(100L);
+        freeze.setFreezeNo("RISK_test");
+
+        when(pointsFreezeService.freezeWithBudget(any(), eq(1L))).thenReturn(freeze);
+        when(riskFreezeOrderMapper.insert(any())).thenReturn(1);
+
+        RiskFreezeOrder result = riskFreezeReviewService.createRiskFreeze(
+                1001L, 1L, 50L, "BLACKLIST_HIT", 500L, 72);
+
+        assertNotNull(result);
+        verify(pointsFreezeService).freezeWithBudget(any(), eq(1L));
+        verify(pointsFreezeService, never()).freeze(any());
+    }
+
+    @Test
+    void testCreateRiskFreeze_WithoutPoolId_UsesRegularFreeze() {
+        PointsFreeze freeze = new PointsFreeze();
+        freeze.setId(100L);
+        freeze.setFreezeNo("RISK_test");
+
+        when(pointsFreezeService.freeze(any())).thenReturn(freeze);
+        when(riskFreezeOrderMapper.insert(any())).thenReturn(1);
+
+        RiskFreezeOrder result = riskFreezeReviewService.createRiskFreeze(
+                1001L, null, 50L, "MANUAL", 500L, 72);
+
+        assertNotNull(result);
+        verify(pointsFreezeService).freeze(any());
+        verify(pointsFreezeService, never()).freezeWithBudget(any(), anyLong());
+    }
 }

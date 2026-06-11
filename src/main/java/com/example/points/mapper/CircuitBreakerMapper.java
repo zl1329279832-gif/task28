@@ -42,4 +42,17 @@ public interface CircuitBreakerMapper extends BaseMapper<CircuitBreaker> {
             "half_open_count = 0, last_failure_time = NOW(), update_time = NOW() " +
             "WHERE pool_id = #{poolId} AND status = 'HALF_OPEN'")
     int reopenFromHalfOpen(@Param("poolId") Long poolId);
+
+    @Update("UPDATE circuit_breaker SET status = 'OPEN', failure_count = failure_count + 1, " +
+            "last_failure_time = NOW(), last_state_change = NOW(), half_open_count = 0, " +
+            "budget_released = #{budgetReleased}, update_time = NOW() " +
+            "WHERE pool_id = #{poolId}")
+    int tripBreakerWithBudgetFlag(@Param("poolId") Long poolId,
+                                  @Param("budgetReleased") int budgetReleased);
+
+    @Update("UPDATE circuit_breaker SET status = 'CLOSED', failure_count = 0, " +
+            "half_open_count = 0, budget_released = 0, " +
+            "last_state_change = NOW(), update_time = NOW() " +
+            "WHERE pool_id = #{poolId} AND status = 'HALF_OPEN'")
+    int closeFromHalfOpenResetBudget(@Param("poolId") Long poolId);
 }

@@ -73,9 +73,10 @@ class BudgetBenefitTest {
         BudgetPool pool = new BudgetPool();
         pool.setId(1L);
         pool.setStatus(1);
+        when(riskControlService.isCircuitBreakerAllowing(1L)).thenReturn(true);
+        when(budgetPoolService.isPoolActiveAndValid(1L)).thenReturn(true);
         when(budgetPoolService.getPool(1L)).thenReturn(pool);
         when(budgetPoolService.isPoolValidFor(any(), eq(2L))).thenReturn(true);
-        when(riskControlService.isCircuitBreakerAllowing(1L)).thenReturn(true);
 
         when(accountMapper.deductPoints(1001L, 500L)).thenReturn(1);
         when(benefitMapper.decrementStock(1L)).thenReturn(1);
@@ -121,6 +122,7 @@ class BudgetBenefitTest {
         when(accountService.getAccount(1001L)).thenReturn(account);
 
         when(riskControlService.isCircuitBreakerAllowing(1L)).thenReturn(true);
+        when(budgetPoolService.isPoolActiveAndValid(1L)).thenReturn(true);
         BudgetPool pool = new BudgetPool();
         pool.setId(1L);
         when(budgetPoolService.getPool(1L)).thenReturn(pool);
@@ -145,6 +147,7 @@ class BudgetBenefitTest {
 
         when(flowService.checkIdempotent("refund-ex-001")).thenReturn(null);
         when(exchangeRecordMapper.selectOne(any())).thenReturn(record);
+        when(budgetPoolService.isPoolActiveAndValid(1L)).thenReturn(true);
 
         PointsAccount account = new PointsAccount();
         account.setMemberId(1001L);
@@ -155,6 +158,66 @@ class BudgetBenefitTest {
         when(exchangeRecordMapper.updateById(any())).thenReturn(1);
 
         benefitService.refundExchange("ORDER-001", "refund-ex-001", "admin");
+
+        verify(budgetPoolService).restoreBudget(1L, 500L);
+    }
+
+    @Test
+    void testRedeem_PoolNotActive_Throws() {
+        RedeemRequest request = new RedeemRequest();
+        request.setMemberId(1001L);
+        request.setBenefitId(1L);
+        request.setEventId("redeem-inactive-pool");
+        request.setBudgetPoolId(99L);
+
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(false);
+        when(flowService.checkIdempotent("redeem-inactive-pool")).thenReturn(null);
+
+        Benefit benefit = new Benefit();
+        benefit.setId(1L);
+        benefit.setBenefitName("Test");
+        benefit.setPointsCost(500L);
+        benefit.setAvailableStock(10);
+        benefit.setStatus(1);
+        when(benefitMapper.selectById(1L)).thenReturn(benefit);
+
+        PointsAccount account = new PointsAccount();
+        account.setMemberId(1001L);
+        account.setAvailablePoints(1000L);
+        account.setLevelId(2L);
+        account.setStatus(1);
+        when(accountService.getAccount(1001L)).thenReturn(account);
+
+        when(riskControlService.isCircuitBreakerAllowing(99L)).thenReturn(true);
+        when(budgetPoolService.isPoolActiveAndValid(99L)).thenReturn(false);
+
+        assertThrows(BusinessException.class, () -> benefitService.redeem(request));
+        verify(budgetPoolService, never()).consumeBudget(anyLong(), anyLong());
+    }
+
+    @Test
+    void testRefundExchange_OriginalPoolExpired_StillRestores() {
+        ExchangeRecord record = new ExchangeRecord();
+        record.setId(1L);
+        record.setMemberId(1001L);
+        record.setBenefitId(1L);
+        record.setPointsCost(500L);
+        record.setStatus(1);
+        record.setBudgetPoolId(1L);
+
+        when(flowService.checkIdempotent("refund-expired-pool")).thenReturn(null);
+        when(exchangeRecordMapper.selectOne(any())).thenReturn(record);
+        when(budgetPoolService.isPoolActiveAndValid(1L)).thenReturn(false);
+        when(accountMapper.addPoints(1001L, 500L)).thenReturn(1);
+        when(benefitMapper.incrementStock(1L)).thenReturn(1);
+        when(exchangeRecordMapper.updateById(any())).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setAvailablePoints(1000L);
+        when(accountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+
+        benefitService.refundExchange("ORDER-001", "refund-expired-pool", "admin");
 
         verify(budgetPoolService).restoreBudget(1L, 500L);
     }

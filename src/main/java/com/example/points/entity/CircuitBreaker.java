@@ -39,6 +39,9 @@ public class CircuitBreaker {
     @TableField("max_test_requests")
     private Integer maxTestRequests;
 
+    @TableField("budget_released")
+    private Integer budgetReleased;
+
     @TableField("create_time")
     private LocalDateTime createTime;
 

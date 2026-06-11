@@ -42,6 +42,7 @@ class PointsFreezeServiceTest {
     @Mock private PointsAccountService accountService;
     @Mock private RedissonClient redissonClient;
     @Mock private RLock rLock;
+    @Mock private BudgetPoolService budgetPoolService;
 
     @BeforeEach
     void setUp() throws Exception {
@@ -382,5 +383,112 @@ class PointsFreezeServiceTest {
         assertEquals(300L, flow.getBeforePoints());
         assertEquals(200L, flow.getAfterPoints());
         assertEquals(-100L, flow.getPointsChange());
+    }
+
+    // --- freezeWithBudget() tests ---
+
+    @Test
+    void testFreezeWithBudget_FreezesBothPointsAndBudget() {
+        FreezeRequest request = new FreezeRequest();
+        request.setMemberId(1001L);
+        request.setPoints(500L);
+        request.setFreezeNo("FZ-BUDGET-001");
+        request.setBizOrderNo("BIZ-001");
+
+        PointsAccount account = new PointsAccount();
+        account.setMemberId(1001L);
+        account.setAvailablePoints(1000L);
+        when(accountService.getAccount(1001L)).thenReturn(account);
+        when(pointsAccountMapper.freezePoints(1001L, 500L)).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setAvailablePoints(500L);
+        when(pointsAccountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+        when(pointsFreezeMapper.updateById(any())).thenReturn(1);
+
+        PointsFreeze result = freezeService.freezeWithBudget(request, 1L);
+
+        assertNotNull(result);
+        verify(budgetPoolService).freezeBudget(1L, 500L);
+        assertEquals(1L, result.getBudgetPoolId());
+        assertEquals(500L, result.getBudgetAmount());
+    }
+
+    @Test
+    void testFreezeWithBudget_NullPoolId_SkipsFreeze() {
+        FreezeRequest request = new FreezeRequest();
+        request.setMemberId(1001L);
+        request.setPoints(500L);
+        request.setFreezeNo("FZ-NOPOOL");
+        request.setBizOrderNo("BIZ-NOPOOL");
+
+        PointsAccount account = new PointsAccount();
+        account.setMemberId(1001L);
+        account.setAvailablePoints(1000L);
+        when(accountService.getAccount(1001L)).thenReturn(account);
+        when(pointsAccountMapper.freezePoints(1001L, 500L)).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setAvailablePoints(500L);
+        when(pointsAccountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+
+        PointsFreeze result = freezeService.freezeWithBudget(request, null);
+
+        assertNotNull(result);
+        verify(budgetPoolService, never()).freezeBudget(anyLong(), anyLong());
+    }
+
+    @Test
+    void testUnfreeze_WithBudgetPool_UnfreezesBudget() {
+        PointsFreeze freeze = PointsFreeze.builder()
+                .id(1L)
+                .memberId(1001L)
+                .freezeNo("FZ-BU001")
+                .points(500L)
+                .bizOrderNo("BIZ-BU001")
+                .status(FreezeStatus.FROZEN.getCode())
+                .budgetPoolId(1L)
+                .budgetAmount(500L)
+                .build();
+
+        when(pointsFreezeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(freeze);
+        when(pointsAccountMapper.unfreezePoints(1001L, 500L)).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setAvailablePoints(1000L);
+        when(pointsAccountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+
+        freezeService.unfreeze("FZ-BU001");
+
+        verify(budgetPoolService).unfreezeBudget(1L, 500L);
+    }
+
+    @Test
+    void testSettleFreeze_WithBudgetPool_ConsumesFrozenBudget() {
+        PointsFreeze freeze = PointsFreeze.builder()
+                .id(1L)
+                .memberId(1001L)
+                .freezeNo("FZ-BS001")
+                .points(500L)
+                .bizOrderNo("BIZ-BS001")
+                .status(FreezeStatus.FROZEN.getCode())
+                .budgetPoolId(1L)
+                .budgetAmount(500L)
+                .build();
+
+        when(pointsFreezeMapper.selectOne(any(LambdaQueryWrapper.class))).thenReturn(freeze);
+        when(pointsAccountMapper.deductFrozenPoints(1001L, 500L)).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setFrozenPoints(0L);
+        when(pointsAccountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+
+        freezeService.settleFreeze("FZ-BS001");
+
+        verify(budgetPoolService).consumeFrozenBudget(1L, 500L);
     }
 }

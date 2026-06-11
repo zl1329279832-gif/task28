@@ -19,6 +19,8 @@ import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 
+import java.util.List;
+
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
@@ -39,6 +41,7 @@ class BudgetPointsEventTest {
     @Mock private RedissonClient redissonClient;
     @Mock private BudgetPoolService budgetPoolService;
     @Mock private RiskControlService riskControlService;
+    @Mock private CircuitBreakerService circuitBreakerService;
     @Mock private RLock rLock;
     @Mock private RBucket<Object> rBucket;
 
@@ -47,6 +50,9 @@ class BudgetPointsEventTest {
         lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
         lenient().when(rLock.tryLock(anyLong(), anyLong(), any())).thenReturn(true);
         lenient().when(redissonClient.getBucket(anyString())).thenReturn(rBucket);
+        lenient().when(budgetPoolService.isPoolActiveAndValid(anyLong())).thenReturn(true);
+        lenient().when(riskControlService.evaluateInTransaction(anyLong(), anyLong(), any(), anyLong()))
+                .thenReturn(java.util.Collections.emptyList());
     }
 
     @Test
@@ -234,5 +240,57 @@ class BudgetPointsEventTest {
         assertNotNull(result);
         assertEquals(300L, result.getPointsChange());
         verify(budgetPoolService).reserveBudget(1L, 300L);
+    }
+
+    @Test
+    void testProcessEvent_BudgetExhaustionInTransaction_ReleasesAndThrows() {
+        PointsEventRequest request = new PointsEventRequest();
+        request.setEventId("evt-exhaust-in-tx");
+        request.setEventType("ACTIVITY");
+        request.setMemberId(1001L);
+        request.setBudgetPoolId(1L);
+
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(false);
+        when(riskControlService.isCircuitBreakerAllowing(1L)).thenReturn(true);
+        when(flowService.checkIdempotent("evt-exhaust-in-tx")).thenReturn(null);
+
+        PointsAccount account = new PointsAccount();
+        account.setMemberId(1001L);
+        account.setAvailablePoints(0L);
+        account.setMonthlyEarned(0L);
+        account.setStatus(1);
+        when(accountService.getOrCreateAccount(1001L)).thenReturn(account);
+        when(ruleEngine.calculatePoints(eq(request), any())).thenReturn(500L);
+        when(accountMapper.addPoints(1001L, 500L)).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setAvailablePoints(500L);
+        when(accountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+
+        // In-transaction risk check returns BUDGET_EXHAUSTION
+        when(riskControlService.evaluateInTransaction(eq(1001L), eq(1L), any(), eq(500L)))
+                .thenReturn(List.of("BUDGET_EXHAUSTION"));
+
+        assertThrows(BusinessException.class, () -> pointsEventService.processEvent(request));
+
+        verify(budgetPoolService).releaseBudget(1L, 500L);
+        verify(circuitBreakerService).recordTrip(1L, true);
+    }
+
+    @Test
+    void testProcessEvent_PoolNotActive_Throws() {
+        PointsEventRequest request = new PointsEventRequest();
+        request.setEventId("evt-inactive-pool");
+        request.setEventType("ACTIVITY");
+        request.setMemberId(1001L);
+        request.setBudgetPoolId(99L);
+
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(false);
+        when(budgetPoolService.isPoolActiveAndValid(99L)).thenReturn(false);
+
+        assertThrows(BusinessException.class, () -> pointsEventService.processEvent(request));
+
+        verify(budgetPoolService, never()).reserveBudget(anyLong(), anyLong());
     }
 }

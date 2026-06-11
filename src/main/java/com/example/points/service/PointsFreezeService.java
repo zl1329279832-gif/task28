@@ -7,6 +7,8 @@ public interface PointsFreezeService {
 
     PointsFreeze freeze(FreezeRequest request);
 
+    PointsFreeze freezeWithBudget(FreezeRequest request, Long budgetPoolId);
+
     void unfreeze(String freezeNo);
 
     void settleFreeze(String freezeNo);

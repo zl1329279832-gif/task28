@@ -1,6 +1,7 @@
 package com.example.points.service.impl;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.example.points.dto.FreezeRequest;
 import com.example.points.entity.*;
 import com.example.points.enums.CircuitBreakerStatus;
 import com.example.points.enums.RiskEventStatus;
@@ -12,10 +13,15 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.redisson.api.RAtomicLong;
+import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Slf4j
@@ -29,6 +35,9 @@ public class RiskControlServiceImpl implements RiskControlService {
     private final RiskEventMapper riskEventMapper;
     private final BudgetPoolService budgetPoolService;
     private final BlacklistService blacklistService;
+    private final PointsFreezeService pointsFreezeService;
+    private final AuditLogService auditLogService;
+    private final RedissonClient redissonClient;
     private final ObjectMapper objectMapper;
 
     @Override
@@ -68,23 +77,81 @@ public class RiskControlServiceImpl implements RiskControlService {
                .eq(RiskControlConfig::getEnabled, 1);
         List<RiskControlConfig> configs = riskControlConfigMapper.selectList(wrapper);
 
-        boolean anyBreached = false;
+        List<String> breachedTypes = new ArrayList<>();
 
         for (RiskControlConfig config : configs) {
             try {
                 boolean breached = evaluateRule(config, memberId, budgetPoolId, flowId, points);
                 if (breached) {
-                    anyBreached = true;
+                    breachedTypes.add(config.getRuleType());
                 }
             } catch (Exception e) {
                 log.error("Error evaluating risk rule {} for pool {}", config.getRuleType(), budgetPoolId, e);
             }
         }
 
-        if (anyBreached) {
+        if (!breachedTypes.isEmpty()) {
             // Trip the circuit breaker
             tripCircuitBreaker(budgetPoolId, configs);
+
+            // If BLACKLIST_HIT was detected, freeze the points AND budget
+            if (breachedTypes.contains("BLACKLIST_HIT")) {
+                try {
+                    triggerFreezeForFlow(memberId, budgetPoolId, flowId, points, "BLACKLIST_HIT");
+                } catch (Exception e) {
+                    log.error("Failed to auto-freeze after BLACKLIST_HIT: memberId={}, flowId={}",
+                            memberId, flowId, e);
+                }
+            }
         }
+    }
+
+    @Override
+    public List<String> evaluateInTransaction(Long memberId, Long budgetPoolId, Long flowId, long points) {
+        if (budgetPoolId == null) {
+            return Collections.emptyList();
+        }
+
+        LambdaQueryWrapper<RiskControlConfig> wrapper = new LambdaQueryWrapper<>();
+        wrapper.eq(RiskControlConfig::getPoolId, budgetPoolId)
+               .eq(RiskControlConfig::getEnabled, 1);
+        List<RiskControlConfig> configs = riskControlConfigMapper.selectList(wrapper);
+
+        List<String> breachedTypes = new ArrayList<>();
+        for (RiskControlConfig config : configs) {
+            try {
+                boolean breached = evaluateRule(config, memberId, budgetPoolId, flowId, points);
+                if (breached) {
+                    breachedTypes.add(config.getRuleType());
+                }
+            } catch (Exception e) {
+                log.error("Error evaluating risk rule {} in-transaction for pool {}",
+                        config.getRuleType(), budgetPoolId, e);
+            }
+        }
+        return breachedTypes;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
+    public void triggerFreezeForFlow(Long memberId, Long budgetPoolId, Long flowId,
+                                      long points, String freezeType) {
+        String freezeNo = "RISK_AUTO_" + System.currentTimeMillis() + "_" + flowId;
+        FreezeRequest freezeRequest = new FreezeRequest();
+        freezeRequest.setMemberId(memberId);
+        freezeRequest.setPoints(points);
+        freezeRequest.setFreezeNo(freezeNo);
+        freezeRequest.setBizOrderNo("RISK_FLOW_" + flowId);
+        freezeRequest.setReason("风控自动冻结: " + freezeType + ", flowId=" + flowId);
+        freezeRequest.setFreezeHours(72);
+
+        pointsFreezeService.freezeWithBudget(freezeRequest, budgetPoolId);
+
+        auditLogService.log("RISK_CONTROL", "AUTO_FREEZE", String.valueOf(flowId),
+                "POINTS_FLOW", null, String.valueOf(points), "SYSTEM", null);
+
+        log.info("Auto-freeze triggered: memberId={}, flowId={}, points={}, freezeType={}",
+                memberId, flowId, points, freezeType);
     }
 
     private boolean evaluateRule(RiskControlConfig config, Long memberId, Long poolId,
@@ -112,15 +179,23 @@ public class RiskControlServiceImpl implements RiskControlService {
             int maxClaims = threshold.get("maxClaims").asInt();
             int windowMinutes = threshold.get("windowMinutes").asInt();
 
-            LocalDateTime since = LocalDateTime.now().minusMinutes(windowMinutes);
-            int claimCount = riskEventMapper.countMemberClaimsSince(memberId, since);
+            // Use Redis atomic counter for real-time accuracy
+            String counterKey = "risk:freq:" + memberId + ":" + poolId;
+            RAtomicLong counter = redissonClient.getAtomicLong(counterKey);
 
-            if (claimCount > maxClaims) {
+            long currentCount = counter.incrementAndGet();
+
+            // Set expiry on first increment
+            if (currentCount == 1) {
+                counter.expire(Duration.ofMinutes(windowMinutes));
+            }
+
+            if (currentCount > maxClaims) {
                 createRiskEvent(poolId, memberId, "HIGH_FREQUENCY", flowId,
                         String.format("{\"claimCount\":%d,\"maxClaims\":%d,\"windowMinutes\":%d}",
-                                claimCount, maxClaims, windowMinutes));
+                                currentCount, maxClaims, windowMinutes));
                 log.warn("HIGH_FREQUENCY risk breached: memberId={}, claims={}, max={}",
-                        memberId, claimCount, maxClaims);
+                        memberId, currentCount, maxClaims);
                 return true;
             }
         } catch (Exception e) {
@@ -190,6 +265,8 @@ public class RiskControlServiceImpl implements RiskControlService {
 
     private void createRiskEvent(Long poolId, Long memberId, String eventType,
                                   Long flowId, String detail) {
+        String idempotentKey = flowId + "_" + eventType;
+
         RiskEvent event = RiskEvent.builder()
                 .poolId(poolId)
                 .memberId(memberId)
@@ -197,9 +274,14 @@ public class RiskControlServiceImpl implements RiskControlService {
                 .flowId(flowId)
                 .detail(detail)
                 .status(RiskEventStatus.OPEN.getCode())
+                .idempotentKey(idempotentKey)
                 .createTime(LocalDateTime.now())
                 .build();
-        riskEventMapper.insert(event);
+
+        int rows = riskEventMapper.insertIgnoreDuplicate(event);
+        if (rows == 0) {
+            log.info("Duplicate risk event suppressed: flowId={}, type={}", flowId, eventType);
+        }
     }
 
     private void tripCircuitBreaker(Long poolId, List<RiskControlConfig> configs) {
@@ -219,13 +301,15 @@ public class RiskControlServiceImpl implements RiskControlService {
                     .cooldownMinutes(cooldown)
                     .halfOpenCount(0)
                     .maxTestRequests(maxTest)
+                    .budgetReleased(0)
                     .createTime(LocalDateTime.now())
                     .updateTime(LocalDateTime.now())
                     .build();
             circuitBreakerMapper.insert(cb);
             log.info("Circuit breaker created and tripped: poolId={}", poolId);
         } else {
-            circuitBreakerMapper.tripBreaker(poolId);
+            // Post-issuance: budget was already reserved (not released)
+            circuitBreakerMapper.tripBreakerWithBudgetFlag(poolId, 0);
             log.info("Circuit breaker tripped: poolId={}", poolId);
         }
     }

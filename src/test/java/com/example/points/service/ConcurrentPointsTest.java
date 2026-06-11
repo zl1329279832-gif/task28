@@ -42,12 +42,18 @@ class ConcurrentPointsTest {
     @Mock private BlacklistService blacklistService;
     @Mock private AuditLogService auditLogService;
     @Mock private RedissonClient redissonClient;
+    @Mock private BudgetPoolService budgetPoolService;
+    @Mock private RiskControlService riskControlService;
+    @Mock private CircuitBreakerService circuitBreakerService;
     @Mock private RLock rLock;
 
     @BeforeEach
     void setUp() throws Exception {
         lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
         lenient().when(rLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        lenient().when(budgetPoolService.isPoolActiveAndValid(any())).thenReturn(true);
+        lenient().when(riskControlService.evaluateInTransaction(anyLong(), anyLong(), any(), anyLong()))
+                .thenReturn(java.util.Collections.emptyList());
     }
 
     @Test
@@ -229,5 +235,44 @@ class ConcurrentPointsTest {
 
         // Verify lock was released in finally block
         verify(rLock).unlock();
+    }
+
+    @Test
+    void testConcurrentIssuance_BudgetConservation() {
+        // Simulate: reserve succeeds but in-transaction risk check finds exhaustion
+        // Budget should be released before throwing
+        PointsEventRequest request = new PointsEventRequest();
+        request.setEventId("evt-conserve");
+        request.setEventType("ACTIVITY");
+        request.setMemberId(1001L);
+        request.setBudgetPoolId(1L);
+
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(false);
+        when(riskControlService.isCircuitBreakerAllowing(1L)).thenReturn(true);
+        when(flowService.checkIdempotent("evt-conserve")).thenReturn(null);
+
+        PointsAccount account = new PointsAccount();
+        account.setMemberId(1001L);
+        account.setAvailablePoints(0L);
+        account.setMonthlyEarned(0L);
+        account.setStatus(1);
+        when(accountService.getOrCreateAccount(1001L)).thenReturn(account);
+        when(ruleEngine.calculatePoints(eq(request), any())).thenReturn(1000L);
+        when(accountMapper.addPoints(1001L, 1000L)).thenReturn(1);
+
+        PointsAccount updatedAccount = new PointsAccount();
+        updatedAccount.setMemberId(1001L);
+        updatedAccount.setAvailablePoints(1000L);
+        when(accountMapper.selectByMemberId(1001L)).thenReturn(updatedAccount);
+
+        // BUDGET_EXHAUSTION breached in-transaction
+        when(riskControlService.evaluateInTransaction(eq(1001L), eq(1L), any(), eq(1000L)))
+                .thenReturn(java.util.List.of("BUDGET_EXHAUSTION"));
+
+        assertThrows(BusinessException.class, () -> pointsEventService.processEvent(request));
+
+        // Budget must be released to maintain conservation
+        verify(budgetPoolService).releaseBudget(1L, 1000L);
+        verify(circuitBreakerService).recordTrip(1L, true);
     }
 }

@@ -41,4 +41,10 @@ public class PointsFreeze {
 
     @TableField("update_time")
     private LocalDateTime updateTime;
+
+    @TableField("budget_pool_id")
+    private Long budgetPoolId;
+
+    @TableField("budget_amount")
+    private Long budgetAmount;
 }

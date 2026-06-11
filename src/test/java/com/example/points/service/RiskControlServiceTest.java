@@ -38,6 +38,9 @@ class RiskControlServiceTest {
     @Mock private RiskEventMapper riskEventMapper;
     @Mock private BudgetPoolService budgetPoolService;
     @Mock private BlacklistService blacklistService;
+    @Mock private PointsFreezeService pointsFreezeService;
+    @Mock private AuditLogService auditLogService;
+    @Mock private org.redisson.api.RedissonClient redissonClient;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
@@ -111,15 +114,19 @@ class RiskControlServiceTest {
         config.setThresholdValue("{\"maxClaims\":10,\"windowMinutes\":5}");
         config.setCooldownMinutes(30);
         config.setMaxTestRequests(10);
+        config.setEnabled(1);
+
+        org.redisson.api.RAtomicLong atomicLong = mock(org.redisson.api.RAtomicLong.class);
+        when(redissonClient.getAtomicLong(anyString())).thenReturn(atomicLong);
+        when(atomicLong.incrementAndGet()).thenReturn(3L);
 
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
-        when(riskEventMapper.countMemberClaimsSince(eq(1001L), any(LocalDateTime.class))).thenReturn(3);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
         // No circuit breaker should be tripped
         verify(circuitBreakerMapper, never()).insert(any());
-        verify(circuitBreakerMapper, never()).tripBreaker(anyLong());
+        verify(circuitBreakerMapper, never()).tripBreakerWithBudgetFlag(anyLong(), anyInt());
     }
 
     @Test
@@ -130,16 +137,20 @@ class RiskControlServiceTest {
         config.setThresholdValue("{\"maxClaims\":5,\"windowMinutes\":5}");
         config.setCooldownMinutes(30);
         config.setMaxTestRequests(10);
+        config.setEnabled(1);
+
+        org.redisson.api.RAtomicLong atomicLong = mock(org.redisson.api.RAtomicLong.class);
+        when(redissonClient.getAtomicLong(anyString())).thenReturn(atomicLong);
+        when(atomicLong.incrementAndGet()).thenReturn(10L);
 
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
-        when(riskEventMapper.countMemberClaimsSince(eq(1001L), any(LocalDateTime.class))).thenReturn(10);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
-        verify(riskEventMapper).insert(any());
+        verify(riskEventMapper).insertIgnoreDuplicate(any());
         verify(circuitBreakerMapper).insert(any());
     }
 
@@ -151,16 +162,40 @@ class RiskControlServiceTest {
         config.setThresholdValue("{}");
         config.setCooldownMinutes(30);
         config.setMaxTestRequests(10);
+        config.setEnabled(1);
 
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
-        verify(riskEventMapper).insert(any());
+        verify(riskEventMapper).insertIgnoreDuplicate(any());
+    }
+
+    @Test
+    void testEvaluatePostIssuance_BlacklistHit_TriggersFreeze() {
+        RiskControlConfig config = new RiskControlConfig();
+        config.setPoolId(1L);
+        config.setRuleType("BLACKLIST_HIT");
+        config.setThresholdValue("{}");
+        config.setCooldownMinutes(30);
+        config.setMaxTestRequests(10);
+        config.setEnabled(1);
+
+        when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
+        when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
+        when(circuitBreakerMapper.insert(any())).thenReturn(1);
+
+        riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
+
+        verify(pointsFreezeService).freezeWithBudget(any(), eq(1L));
+        verify(auditLogService).log(eq("RISK_CONTROL"), eq("AUTO_FREEZE"), eq("100"),
+                eq("POINTS_FLOW"), isNull(), eq("50"), eq("SYSTEM"), isNull());
     }
 
     @Test
@@ -171,6 +206,7 @@ class RiskControlServiceTest {
         config.setThresholdValue("{\"usageThresholdPercent\":80}");
         config.setCooldownMinutes(30);
         config.setMaxTestRequests(10);
+        config.setEnabled(1);
 
         BudgetPool pool = new BudgetPool();
         pool.setId(1L);
@@ -180,12 +216,12 @@ class RiskControlServiceTest {
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(budgetPoolService.getPool(1L)).thenReturn(pool);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
-        verify(riskEventMapper).insert(any());
+        verify(riskEventMapper).insertIgnoreDuplicate(any());
     }
 
     @Test
@@ -196,17 +232,18 @@ class RiskControlServiceTest {
         config.setThresholdValue("{\"maxRefundRatePercent\":30,\"windowHours\":24}");
         config.setCooldownMinutes(30);
         config.setMaxTestRequests(10);
+        config.setEnabled(1);
 
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(riskEventMapper.countMemberRefundsSince(eq(1001L), any(LocalDateTime.class))).thenReturn(5);
         when(riskEventMapper.countMemberIssuancesSince(eq(1001L), any(LocalDateTime.class))).thenReturn(10);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
-        verify(riskEventMapper).insert(any());
+        verify(riskEventMapper).insertIgnoreDuplicate(any());
     }
 
     @Test
@@ -226,12 +263,12 @@ class RiskControlServiceTest {
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(existingCb);
-        when(riskEventMapper.insert(any())).thenReturn(1);
-        when(circuitBreakerMapper.tripBreaker(1L)).thenReturn(1);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
+        when(circuitBreakerMapper.tripBreakerWithBudgetFlag(1L, 0)).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
-        verify(circuitBreakerMapper).tripBreaker(1L);
+        verify(circuitBreakerMapper).tripBreakerWithBudgetFlag(1L, 0);
     }
 
     @Test
@@ -241,6 +278,50 @@ class RiskControlServiceTest {
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
 
         verify(circuitBreakerMapper, never()).insert(any());
-        verify(circuitBreakerMapper, never()).tripBreaker(anyLong());
+        verify(circuitBreakerMapper, never()).tripBreakerWithBudgetFlag(anyLong(), anyInt());
+    }
+
+    @Test
+    void testCreateRiskEvent_DuplicateSuppressed() {
+        RiskControlConfig config = new RiskControlConfig();
+        config.setPoolId(1L);
+        config.setRuleType("BLACKLIST_HIT");
+        config.setThresholdValue("{}");
+        config.setCooldownMinutes(30);
+        config.setMaxTestRequests(10);
+        config.setEnabled(1);
+
+        when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
+        when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
+        when(circuitBreakerMapper.insert(any())).thenReturn(1);
+
+        riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
+
+        verify(riskEventMapper).insertIgnoreDuplicate(any());
+    }
+
+    @Test
+    void testEvaluateInTransaction_ReturnsBreaches() {
+        RiskControlConfig config = new RiskControlConfig();
+        config.setPoolId(1L);
+        config.setRuleType("BLACKLIST_HIT");
+        config.setThresholdValue("{}");
+        config.setEnabled(1);
+
+        when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
+        when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
+        when(riskEventMapper.insertIgnoreDuplicate(any())).thenReturn(1);
+
+        List<String> result = riskControlService.evaluateInTransaction(1001L, 1L, 100L, 50L);
+
+        assertTrue(result.contains("BLACKLIST_HIT"));
+    }
+
+    @Test
+    void testEvaluateInTransaction_NullPoolId_ReturnsEmpty() {
+        List<String> result = riskControlService.evaluateInTransaction(1001L, null, 100L, 50L);
+        assertTrue(result.isEmpty());
     }
 }

@@ -39,6 +39,9 @@ class PointsEventServiceTest {
     @Mock private BlacklistService blacklistService;
     @Mock private AuditLogService auditLogService;
     @Mock private RedissonClient redissonClient;
+    @Mock private BudgetPoolService budgetPoolService;
+    @Mock private RiskControlService riskControlService;
+    @Mock private CircuitBreakerService circuitBreakerService;
     @Mock private RLock rLock;
     @Mock private RBucket<Object> rBucket;
 
@@ -48,6 +51,9 @@ class PointsEventServiceTest {
         lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
         lenient().when(rLock.tryLock(anyLong(), anyLong(), any())).thenReturn(true);
         lenient().when(redissonClient.getBucket(anyString())).thenReturn(rBucket);
+        lenient().when(budgetPoolService.isPoolActiveAndValid(any())).thenReturn(true);
+        lenient().when(riskControlService.evaluateInTransaction(anyLong(), anyLong(), any(), anyLong()))
+                .thenReturn(java.util.Collections.emptyList());
     }
 
     @Test

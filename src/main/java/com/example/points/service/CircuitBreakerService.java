@@ -15,4 +15,6 @@ public interface CircuitBreakerService {
     void recordHalfOpenSuccess(Long poolId);
 
     void recordHalfOpenFailure(Long poolId);
+
+    void recordTrip(Long poolId, boolean budgetReleased);
 }

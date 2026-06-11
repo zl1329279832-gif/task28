@@ -140,6 +140,9 @@ public class BenefitServiceImpl implements BenefitService {
                 if (!riskControlService.isCircuitBreakerAllowing(request.getBudgetPoolId())) {
                     throw new BusinessException("熔断器已开启，兑换被阻止");
                 }
+                if (!budgetPoolService.isPoolActiveAndValid(request.getBudgetPoolId())) {
+                    throw new BusinessException("预算池不存在、已暂停或已过期");
+                }
                 BudgetPool pool = budgetPoolService.getPool(request.getBudgetPoolId());
                 if (!budgetPoolService.isPoolValidFor(pool, account.getLevelId())) {
                     throw new BusinessException("预算池不适用于当前会员等级");
@@ -258,6 +261,10 @@ public class BenefitServiceImpl implements BenefitService {
 
             // 7.5 Restore budget to original pool
             if (record.getBudgetPoolId() != null) {
+                if (!budgetPoolService.isPoolActiveAndValid(record.getBudgetPoolId())) {
+                    log.warn("Restoring budget to inactive/expired pool: poolId={}, exchangeNo={}",
+                            record.getBudgetPoolId(), record.getExchangeNo());
+                }
                 budgetPoolService.restoreBudget(record.getBudgetPoolId(), record.getPointsCost());
             }
 

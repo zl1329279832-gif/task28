@@ -11,6 +11,7 @@ import com.example.points.mapper.PointsAccountMapper;
 import com.example.points.mapper.PointsFreezeMapper;
 import com.example.points.service.AuditLogService;
 import com.example.points.service.BlacklistService;
+import com.example.points.service.BudgetPoolService;
 import com.example.points.service.PointsAccountService;
 import com.example.points.service.PointsFlowService;
 import com.example.points.service.PointsFreezeService;
@@ -37,6 +38,7 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
     private final AuditLogService auditLogService;
     private final PointsAccountService accountService;
     private final RedissonClient redissonClient;
+    private final BudgetPoolService budgetPoolService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -130,6 +132,24 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
 
     @Override
     @Transactional(rollbackFor = Exception.class)
+    public PointsFreeze freezeWithBudget(FreezeRequest request, Long budgetPoolId) {
+        PointsFreeze freeze = freeze(request);
+
+        if (budgetPoolId != null && freeze != null) {
+            budgetPoolService.freezeBudget(budgetPoolId, request.getPoints());
+
+            freeze.setBudgetPoolId(budgetPoolId);
+            freeze.setBudgetAmount(request.getPoints());
+            pointsFreezeMapper.updateById(freeze);
+
+            log.info("Budget frozen alongside points: poolId={}, points={}, freezeNo={}",
+                    budgetPoolId, request.getPoints(), request.getFreezeNo());
+        }
+        return freeze;
+    }
+
+    @Override
+    @Transactional(rollbackFor = Exception.class)
     public void unfreeze(String freezeNo) {
         // 1. Find freeze record, check status == FROZEN
         PointsFreeze freeze = getFreezeByNo(freezeNo);
@@ -184,6 +204,13 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
 
             auditLogService.log("POINTS", "UNFREEZE", String.valueOf(freeze.getMemberId()), "MEMBER",
                     String.valueOf(beforePoints), String.valueOf(afterPoints), "SYSTEM", null);
+
+            // Unfreeze corresponding budget if this freeze was linked to a budget pool
+            if (freeze.getBudgetPoolId() != null && freeze.getBudgetAmount() != null) {
+                budgetPoolService.unfreezeBudget(freeze.getBudgetPoolId(), freeze.getBudgetAmount());
+                log.info("Budget unfrozen alongside points: poolId={}, amount={}",
+                        freeze.getBudgetPoolId(), freeze.getBudgetAmount());
+            }
 
             log.info("Points unfrozen: memberId={}, points={}, freezeNo={}",
                     freeze.getMemberId(), freeze.getPoints(), freezeNo);
@@ -253,6 +280,13 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
 
             auditLogService.log("POINTS", "SETTLE_FREEZE", String.valueOf(freeze.getMemberId()), "MEMBER",
                     String.valueOf(beforeFrozen), String.valueOf(afterFrozen), "SYSTEM", null);
+
+            // Consume frozen budget (points permanently deducted)
+            if (freeze.getBudgetPoolId() != null && freeze.getBudgetAmount() != null) {
+                budgetPoolService.consumeFrozenBudget(freeze.getBudgetPoolId(), freeze.getBudgetAmount());
+                log.info("Frozen budget consumed on settle: poolId={}, amount={}",
+                        freeze.getBudgetPoolId(), freeze.getBudgetAmount());
+            }
 
             log.info("Freeze settled: memberId={}, points={}, freezeNo={}",
                     freeze.getMemberId(), freeze.getPoints(), freezeNo);

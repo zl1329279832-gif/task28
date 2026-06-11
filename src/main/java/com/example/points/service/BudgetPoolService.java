@@ -26,5 +26,13 @@ public interface BudgetPoolService {
 
     void restoreBudget(Long poolId, long points);
 
+    void freezeBudget(Long poolId, long points);
+
+    void unfreezeBudget(Long poolId, long points);
+
+    void consumeFrozenBudget(Long poolId, long points);
+
+    boolean isPoolActiveAndValid(Long poolId);
+
     boolean isPoolValidFor(BudgetPool pool, Long memberLevelId);
 }

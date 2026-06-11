@@ -96,9 +96,18 @@ public class CircuitBreakerServiceImpl implements CircuitBreakerService {
         for (CircuitBreaker cb : halfOpenBreakers) {
             try {
                 if (cb.getHalfOpenCount() >= cb.getMaxTestRequests()) {
-                    int rows = circuitBreakerMapper.closeFromHalfOpen(cb.getPoolId());
-                    if (rows > 0) {
-                        log.info("Circuit breaker HALF_OPEN -> CLOSED: poolId={}", cb.getPoolId());
+                    if (cb.getBudgetReleased() != null && cb.getBudgetReleased() == 1) {
+                        // Budget was already released during trip; close without re-releasing
+                        int rows = circuitBreakerMapper.closeFromHalfOpenResetBudget(cb.getPoolId());
+                        if (rows > 0) {
+                            log.info("Circuit breaker HALF_OPEN -> CLOSED (budget already released, no re-release): poolId={}",
+                                    cb.getPoolId());
+                        }
+                    } else {
+                        int rows = circuitBreakerMapper.closeFromHalfOpen(cb.getPoolId());
+                        if (rows > 0) {
+                            log.info("Circuit breaker HALF_OPEN -> CLOSED: poolId={}", cb.getPoolId());
+                        }
                     }
                 }
             } catch (Exception e) {
@@ -117,6 +126,16 @@ public class CircuitBreakerServiceImpl implements CircuitBreakerService {
         int rows = circuitBreakerMapper.reopenFromHalfOpen(poolId);
         if (rows > 0) {
             log.info("Circuit breaker HALF_OPEN -> OPEN (failure): poolId={}", poolId);
+        }
+    }
+
+    @Override
+    public void recordTrip(Long poolId, boolean budgetReleased) {
+        int flag = budgetReleased ? 1 : 0;
+        int rows = circuitBreakerMapper.tripBreakerWithBudgetFlag(poolId, flag);
+        if (rows > 0) {
+            log.info("Circuit breaker tripped with budget flag: poolId={}, budgetReleased={}",
+                    poolId, budgetReleased);
         }
     }
 }

@@ -24,6 +24,9 @@ public class BudgetPool {
     @TableField("used_budget")
     private Long usedBudget;
 
+    @TableField("frozen_budget")
+    private Long frozenBudget;
+
     @TableField("daily_cap")
     private Long dailyCap;
 

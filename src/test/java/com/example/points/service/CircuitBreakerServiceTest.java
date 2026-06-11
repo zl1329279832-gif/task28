@@ -119,4 +119,38 @@ class CircuitBreakerServiceTest {
         circuitBreakerService.recordHalfOpenFailure(10L);
         verify(circuitBreakerMapper).reopenFromHalfOpen(10L);
     }
+
+    @Test
+    void testProcessRecoveryChecks_HalfOpenToClosed_BudgetAlreadyReleased_NoReRelease() {
+        CircuitBreaker cb = new CircuitBreaker();
+        cb.setId(1L);
+        cb.setPoolId(10L);
+        cb.setStatus(CircuitBreakerStatus.HALF_OPEN.name());
+        cb.setHalfOpenCount(10);
+        cb.setMaxTestRequests(10);
+        cb.setBudgetReleased(1);
+
+        when(circuitBreakerMapper.findOpenBreakersReadyForRecovery()).thenReturn(Collections.emptyList());
+        when(circuitBreakerMapper.selectList(any())).thenReturn(List.of(cb));
+        when(circuitBreakerMapper.closeFromHalfOpenResetBudget(10L)).thenReturn(1);
+
+        circuitBreakerService.processRecoveryChecks();
+
+        verify(circuitBreakerMapper).closeFromHalfOpenResetBudget(10L);
+        verify(circuitBreakerMapper, never()).closeFromHalfOpen(anyLong());
+    }
+
+    @Test
+    void testRecordTrip_WithBudgetReleased() {
+        when(circuitBreakerMapper.tripBreakerWithBudgetFlag(10L, 1)).thenReturn(1);
+        circuitBreakerService.recordTrip(10L, true);
+        verify(circuitBreakerMapper).tripBreakerWithBudgetFlag(10L, 1);
+    }
+
+    @Test
+    void testRecordTrip_WithoutBudgetReleased() {
+        when(circuitBreakerMapper.tripBreakerWithBudgetFlag(10L, 0)).thenReturn(1);
+        circuitBreakerService.recordTrip(10L, false);
+        verify(circuitBreakerMapper).tripBreakerWithBudgetFlag(10L, 0);
+    }
 }

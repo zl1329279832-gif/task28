@@ -3,6 +3,7 @@ package com.example.points.mapper;
 import com.baomidou.mybatisplus.core.mapper.BaseMapper;
 import com.example.points.entity.BudgetPool;
 import org.apache.ibatis.annotations.Param;
+import org.apache.ibatis.annotations.Select;
 import org.apache.ibatis.annotations.Update;
 
 import java.time.LocalDate;
@@ -31,6 +32,23 @@ public interface BudgetPoolMapper extends BaseMapper<BudgetPool> {
     @Update("UPDATE budget_pool SET used_budget = GREATEST(used_budget - #{points}, 0), " +
             "update_time = NOW() WHERE id = #{poolId}")
     int restoreBudget(@Param("poolId") Long poolId, @Param("points") long points);
+
+    @Update("UPDATE budget_pool SET used_budget = GREATEST(used_budget - #{points}, 0), " +
+            "frozen_budget = frozen_budget + #{points}, " +
+            "update_time = NOW() WHERE id = #{poolId} AND used_budget >= #{points}")
+    int freezeBudget(@Param("poolId") Long poolId, @Param("points") long points);
+
+    @Update("UPDATE budget_pool SET frozen_budget = GREATEST(frozen_budget - #{points}, 0), " +
+            "update_time = NOW() WHERE id = #{poolId} AND frozen_budget >= #{points}")
+    int unfreezeBudget(@Param("poolId") Long poolId, @Param("points") long points);
+
+    @Update("UPDATE budget_pool SET frozen_budget = GREATEST(frozen_budget - #{points}, 0), " +
+            "update_time = NOW() WHERE id = #{poolId} AND frozen_budget >= #{points}")
+    int consumeFrozenBudget(@Param("poolId") Long poolId, @Param("points") long points);
+
+    @Select("SELECT COUNT(*) FROM budget_pool WHERE id = #{poolId} AND status = 1 " +
+            "AND start_time <= NOW() AND end_time >= NOW()")
+    int countValidPool(@Param("poolId") Long poolId);
 
     @Update("UPDATE budget_pool SET daily_used = 0, daily_reset_date = #{resetDate}, " +
             "update_time = NOW() WHERE daily_reset_date IS NULL OR daily_reset_date < #{resetDate}")

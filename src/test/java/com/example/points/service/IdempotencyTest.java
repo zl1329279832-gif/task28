@@ -47,12 +47,18 @@ class IdempotencyTest {
         @Mock private BlacklistService blacklistService;
         @Mock private AuditLogService auditLogService;
         @Mock private RedissonClient redissonClient;
+        @Mock private BudgetPoolService budgetPoolService;
+        @Mock private RiskControlService riskControlService;
+        @Mock private CircuitBreakerService circuitBreakerService;
         @Mock private RLock rLock;
 
         @BeforeEach
         void setUp() throws Exception {
             lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
             lenient().when(rLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+            lenient().when(budgetPoolService.isPoolActiveAndValid(any())).thenReturn(true);
+            lenient().when(riskControlService.evaluateInTransaction(anyLong(), anyLong(), any(), anyLong()))
+                    .thenReturn(java.util.Collections.emptyList());
         }
 
         @Test

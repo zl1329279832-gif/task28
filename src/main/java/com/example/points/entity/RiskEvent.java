@@ -33,6 +33,9 @@ public class RiskEvent {
     @TableField("status")
     private Integer status;
 
+    @TableField("idempotent_key")
+    private String idempotentKey;
+
     @TableField("create_time")
     private LocalDateTime createTime;
 }

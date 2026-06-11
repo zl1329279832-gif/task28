@@ -53,7 +53,12 @@ public class RiskFreezeReviewServiceImpl implements RiskFreezeReviewService {
         freezeRequest.setReason("风控冻结: " + freezeType);
         freezeRequest.setFreezeHours(expireHours);
 
-        PointsFreeze pointsFreeze = pointsFreezeService.freeze(freezeRequest);
+        PointsFreeze pointsFreeze;
+        if (poolId != null) {
+            pointsFreeze = pointsFreezeService.freezeWithBudget(freezeRequest, poolId);
+        } else {
+            pointsFreeze = pointsFreezeService.freeze(freezeRequest);
+        }
 
         // Create risk freeze order
         String freezeOrderNo = "RFO_" + System.currentTimeMillis() + UUID.randomUUID().toString().substring(0, 6);
@@ -123,6 +128,13 @@ public class RiskFreezeReviewServiceImpl implements RiskFreezeReviewService {
                     "RISK_FREEZE_ORDER", "PENDING", "APPROVED",
                     request.getReviewer(), null);
 
+            auditLogService.log("RISK_FREEZE", "APPROVE_CHAIN", String.valueOf(freezeOrderId),
+                    "RISK_FREEZE_ORDER",
+                    String.format("{\"freezeOrderNo\":\"%s\",\"pointsFreezeId\":%d,\"poolId\":%s}",
+                            order.getFreezeOrderNo(), order.getPointsFreezeId(), order.getPoolId()),
+                    "APPROVED",
+                    request.getReviewer(), null);
+
             log.info("Risk freeze order approved: id={}, reviewer={}", freezeOrderId, request.getReviewer());
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -165,6 +177,13 @@ public class RiskFreezeReviewServiceImpl implements RiskFreezeReviewService {
 
             auditLogService.log("RISK_FREEZE", "REJECT", String.valueOf(freezeOrderId),
                     "RISK_FREEZE_ORDER", "PENDING", "REJECTED",
+                    request.getReviewer(), null);
+
+            auditLogService.log("RISK_FREEZE", "REJECT_CHAIN", String.valueOf(freezeOrderId),
+                    "RISK_FREEZE_ORDER",
+                    String.format("{\"freezeOrderNo\":\"%s\",\"pointsFreezeId\":%d,\"poolId\":%s}",
+                            order.getFreezeOrderNo(), order.getPointsFreezeId(), order.getPoolId()),
+                    "REJECTED",
                     request.getReviewer(), null);
 
             log.info("Risk freeze order rejected: id={}, reviewer={}", freezeOrderId, request.getReviewer());

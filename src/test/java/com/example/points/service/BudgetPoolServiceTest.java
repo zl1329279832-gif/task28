@@ -195,4 +195,42 @@ class BudgetPoolServiceTest {
         verify(auditLogService).log(eq("BUDGET_POOL"), eq("REACTIVATE"), eq("1"),
                 eq("BUDGET_POOL"), eq("SUSPENDED"), eq("ACTIVE"), eq("admin"), isNull());
     }
+
+    @Test
+    void testFreezeBudget_Success() {
+        when(budgetPoolMapper.freezeBudget(1L, 500L)).thenReturn(1);
+        assertDoesNotThrow(() -> budgetPoolService.freezeBudget(1L, 500L));
+        verify(budgetPoolMapper).freezeBudget(1L, 500L);
+    }
+
+    @Test
+    void testUnfreezeBudget_Success() {
+        when(budgetPoolMapper.unfreezeBudget(1L, 500L)).thenReturn(1);
+        assertDoesNotThrow(() -> budgetPoolService.unfreezeBudget(1L, 500L));
+        verify(budgetPoolMapper).unfreezeBudget(1L, 500L);
+    }
+
+    @Test
+    void testConsumeFrozenBudget_Success() {
+        when(budgetPoolMapper.consumeFrozenBudget(1L, 500L)).thenReturn(1);
+        assertDoesNotThrow(() -> budgetPoolService.consumeFrozenBudget(1L, 500L));
+        verify(budgetPoolMapper).consumeFrozenBudget(1L, 500L);
+    }
+
+    @Test
+    void testIsPoolActiveAndValid_Exists() {
+        when(budgetPoolMapper.countValidPool(1L)).thenReturn(1);
+        assertTrue(budgetPoolService.isPoolActiveAndValid(1L));
+    }
+
+    @Test
+    void testIsPoolActiveAndValid_NullPoolId() {
+        assertTrue(budgetPoolService.isPoolActiveAndValid(null));
+    }
+
+    @Test
+    void testIsPoolActiveAndValid_NotFound() {
+        when(budgetPoolMapper.countValidPool(999L)).thenReturn(0);
+        assertFalse(budgetPoolService.isPoolActiveAndValid(999L));
+    }
 }

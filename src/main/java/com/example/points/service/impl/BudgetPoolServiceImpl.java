@@ -169,6 +169,41 @@ public class BudgetPoolServiceImpl implements BudgetPoolService {
     }
 
     @Override
+    public void freezeBudget(Long poolId, long points) {
+        int rows = budgetPoolMapper.freezeBudget(poolId, points);
+        if (rows == 0) {
+            log.warn("Budget freeze returned 0 rows: poolId={}, points={}", poolId, points);
+        }
+        log.debug("Budget frozen: poolId={}, points={}", poolId, points);
+    }
+
+    @Override
+    public void unfreezeBudget(Long poolId, long points) {
+        int rows = budgetPoolMapper.unfreezeBudget(poolId, points);
+        if (rows == 0) {
+            log.warn("Budget unfreeze returned 0 rows: poolId={}, points={}", poolId, points);
+        }
+        log.debug("Budget unfrozen: poolId={}, points={}", poolId, points);
+    }
+
+    @Override
+    public void consumeFrozenBudget(Long poolId, long points) {
+        int rows = budgetPoolMapper.consumeFrozenBudget(poolId, points);
+        if (rows == 0) {
+            log.warn("Consume frozen budget returned 0 rows: poolId={}, points={}", poolId, points);
+        }
+        log.debug("Frozen budget consumed: poolId={}, points={}", poolId, points);
+    }
+
+    @Override
+    public boolean isPoolActiveAndValid(Long poolId) {
+        if (poolId == null) {
+            return true;
+        }
+        return budgetPoolMapper.countValidPool(poolId) > 0;
+    }
+
+    @Override
     public boolean isPoolValidFor(BudgetPool pool, Long memberLevelId) {
         // Check status
         if (pool.getStatus() == null || pool.getStatus() != BudgetPoolStatus.ACTIVE.getCode()) {

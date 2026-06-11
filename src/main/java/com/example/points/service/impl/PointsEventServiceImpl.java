@@ -37,6 +37,7 @@ public class PointsEventServiceImpl implements PointsEventService {
     private final RedissonClient redissonClient;
     private final BudgetPoolService budgetPoolService;
     private final RiskControlService riskControlService;
+    private final CircuitBreakerService circuitBreakerService;
 
     @Override
     @Transactional(rollbackFor = Exception.class)
@@ -46,7 +47,14 @@ public class PointsEventServiceImpl implements PointsEventService {
             throw new BusinessException("会员已被加入黑名单");
         }
 
-        // 1.5 Circuit breaker pre-check
+        // 1.5 Budget pool validation
+        if (request.getBudgetPoolId() != null) {
+            if (!budgetPoolService.isPoolActiveAndValid(request.getBudgetPoolId())) {
+                throw new BusinessException("预算池不存在、已暂停或已过期");
+            }
+        }
+
+        // 1.6 Circuit breaker pre-check
         if (request.getBudgetPoolId() != null
                 && !riskControlService.isCircuitBreakerAllowing(request.getBudgetPoolId())) {
             throw new BusinessException("熔断器已开启，积分发放被阻止");
@@ -116,12 +124,25 @@ public class PointsEventServiceImpl implements PointsEventService {
                     .build();
             flowService.saveFlow(flow);
 
-            // 9. Audit log
+            // 9.5 In-transaction risk check for BUDGET_EXHAUSTION
+            //     Must happen inside the transaction so we can rollback if breached
+            if (request.getBudgetPoolId() != null && points > 0) {
+                java.util.List<String> breachedTypes = riskControlService.evaluateInTransaction(
+                        request.getMemberId(), request.getBudgetPoolId(), flow.getId(), points);
+
+                if (breachedTypes.contains("BUDGET_EXHAUSTION")) {
+                    budgetPoolService.releaseBudget(request.getBudgetPoolId(), points);
+                    circuitBreakerService.recordTrip(request.getBudgetPoolId(), true);
+                    throw new BusinessException("预算池已耗尽，积分发放被拒绝");
+                }
+            }
+
+            // 10. Audit log
             auditLogService.log("POINTS", "EARN", String.valueOf(request.getMemberId()),
                     "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
                     "SYSTEM", null);
 
-            // 10. Post-commit risk evaluation
+            // 11. Post-commit risk evaluation (for non-BUDGET_EXHAUSTION rules)
             final Long budgetPoolId = request.getBudgetPoolId();
             final long earnedPoints = points;
             if (budgetPoolId != null
@@ -312,6 +333,10 @@ public class PointsEventServiceImpl implements PointsEventService {
 
             // Restore budget to original pool
             if (originalFlow.getBudgetPoolId() != null) {
+                if (!budgetPoolService.isPoolActiveAndValid(originalFlow.getBudgetPoolId())) {
+                    log.warn("Restoring budget to inactive pool: poolId={}, flowId={}",
+                            originalFlow.getBudgetPoolId(), originalFlow.getId());
+                }
                 budgetPoolService.restoreBudget(originalFlow.getBudgetPoolId(), refundPoints);
             }
 
