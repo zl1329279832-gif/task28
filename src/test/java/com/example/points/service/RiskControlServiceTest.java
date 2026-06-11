@@ -2,6 +2,8 @@ package com.example.points.service;
 
 import com.example.points.entity.CircuitBreaker;
 import com.example.points.entity.RiskControlConfig;
+import com.example.points.entity.RiskEvent;
+import com.example.points.entity.RiskFreezeOrder;
 import com.example.points.entity.BudgetPool;
 import com.example.points.enums.BudgetPoolStatus;
 import com.example.points.enums.CircuitBreakerStatus;
@@ -38,9 +40,17 @@ class RiskControlServiceTest {
     @Mock private RiskEventMapper riskEventMapper;
     @Mock private BudgetPoolService budgetPoolService;
     @Mock private BlacklistService blacklistService;
+    @Mock private RiskFreezeReviewService riskFreezeReviewService;
+    @Mock private AuditLogService auditLogService;
 
     @Spy
     private ObjectMapper objectMapper = new ObjectMapper();
+
+    @BeforeEach
+    void setUp() {
+        lenient().when(riskFreezeReviewService.createRiskFreeze(anyLong(), anyLong(), anyLong(), anyString(), anyLong(), anyInt()))
+                .thenReturn(new RiskFreezeOrder());
+    }
 
     // --- isCircuitBreakerAllowing tests ---
 
@@ -134,7 +144,11 @@ class RiskControlServiceTest {
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(riskEventMapper.countMemberClaimsSince(eq(1001L), any(LocalDateTime.class))).thenReturn(10);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insert(any(RiskEvent.class))).thenAnswer(invocation -> {
+            RiskEvent e = invocation.getArgument(0);
+            e.setId(1L);
+            return 1;
+        });
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
@@ -155,7 +169,11 @@ class RiskControlServiceTest {
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insert(any(RiskEvent.class))).thenAnswer(invocation -> {
+            RiskEvent e = invocation.getArgument(0);
+            e.setId(1L);
+            return 1;
+        });
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
@@ -180,7 +198,11 @@ class RiskControlServiceTest {
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(budgetPoolService.getPool(1L)).thenReturn(pool);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insert(any(RiskEvent.class))).thenAnswer(invocation -> {
+            RiskEvent e = invocation.getArgument(0);
+            e.setId(1L);
+            return 1;
+        });
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
@@ -201,7 +223,11 @@ class RiskControlServiceTest {
         when(riskEventMapper.countMemberRefundsSince(eq(1001L), any(LocalDateTime.class))).thenReturn(5);
         when(riskEventMapper.countMemberIssuancesSince(eq(1001L), any(LocalDateTime.class))).thenReturn(10);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(null);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insert(any(RiskEvent.class))).thenAnswer(invocation -> {
+            RiskEvent e = invocation.getArgument(0);
+            e.setId(1L);
+            return 1;
+        });
         when(circuitBreakerMapper.insert(any())).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);
@@ -226,7 +252,11 @@ class RiskControlServiceTest {
         when(riskControlConfigMapper.selectList(any())).thenReturn(List.of(config));
         when(blacklistService.isBlacklisted(1001L)).thenReturn(true);
         when(circuitBreakerMapper.selectByPoolId(1L)).thenReturn(existingCb);
-        when(riskEventMapper.insert(any())).thenReturn(1);
+        when(riskEventMapper.insert(any(RiskEvent.class))).thenAnswer(invocation -> {
+            RiskEvent e = invocation.getArgument(0);
+            e.setId(1L);
+            return 1;
+        });
         when(circuitBreakerMapper.tripBreaker(1L)).thenReturn(1);
 
         riskControlService.evaluatePostIssuance(1001L, 1L, 100L, 50L);

@@ -13,6 +13,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -36,12 +38,17 @@ class BudgetBenefitTest {
     @Mock private RedissonClient redissonClient;
     @Mock private BudgetPoolService budgetPoolService;
     @Mock private RiskControlService riskControlService;
+    @Mock private TransactionTemplate transactionTemplate;
     @Mock private RLock rLock;
 
     @BeforeEach
     void setUp() throws Exception {
         lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
         lenient().when(rLock.tryLock(anyLong(), anyLong(), any())).thenReturn(true);
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
     }
 
     @Test
@@ -91,7 +98,7 @@ class BudgetBenefitTest {
 
         assertNotNull(result);
         assertEquals(1L, result.getBudgetPoolId());
-        verify(budgetPoolService).consumeBudget(1L, 500L);
+        verify(budgetPoolService).reserveBudget(1L, 500L);
     }
 
     @Test
@@ -126,8 +133,8 @@ class BudgetBenefitTest {
         when(budgetPoolService.getPool(1L)).thenReturn(pool);
         when(budgetPoolService.isPoolValidFor(any(), eq(2L))).thenReturn(true);
 
-        doThrow(new BusinessException("预算池额度不足"))
-                .when(budgetPoolService).consumeBudget(1L, 500L);
+        doThrow(new BusinessException("预算池额度不足或已超限"))
+                .when(budgetPoolService).reserveBudget(1L, 500L);
 
         assertThrows(BusinessException.class, () -> benefitService.redeem(request));
         verify(accountMapper, never()).deductPoints(anyLong(), anyLong());
@@ -156,6 +163,6 @@ class BudgetBenefitTest {
 
         benefitService.refundExchange("ORDER-001", "refund-ex-001", "admin");
 
-        verify(budgetPoolService).restoreBudget(1L, 500L);
+        verify(budgetPoolService).releaseBudget(1L, 500L);
     }
 }

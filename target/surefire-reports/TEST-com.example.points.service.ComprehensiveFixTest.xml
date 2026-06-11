@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" name="com.example.points.service.BudgetPointsEventTest" time="0.1" tests="7" errors="0" skipped="0" failures="0">
+<testsuite xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="https://maven.apache.org/surefire/maven-surefire-plugin/xsd/surefire-test-report.xsd" name="com.example.points.service.ComprehensiveFixTest" time="0.254" tests="29" errors="0" skipped="0" failures="0">
   <properties>
     <property name="java.specification.version" value="17"/>
     <property name="sun.cpu.isalist" value="amd64"/>
@@ -58,11 +58,33 @@
     <property name="sun.io.unicode.encoding" value="UnicodeLittle"/>
     <property name="java.class.version" value="61.0"/>
   </properties>
-  <testcase name="testProcessEvent_WithBudgetPool_Success" classname="com.example.points.service.BudgetPointsEventTest" time="0.062"/>
-  <testcase name="testProcessEvent_RuleVersionChange_BudgetStillWorks" classname="com.example.points.service.BudgetPointsEventTest" time="0.006"/>
-  <testcase name="testProcessEvent_ZeroPointsWithBudget_NoReservation" classname="com.example.points.service.BudgetPointsEventTest" time="0.006"/>
-  <testcase name="testProcessEvent_DuplicateWithBudget_NoDoubleReserve" classname="com.example.points.service.BudgetPointsEventTest" time="0.003"/>
-  <testcase name="testProcessEvent_CircuitBreakerOpen_Throws" classname="com.example.points.service.BudgetPointsEventTest" time="0.005"/>
-  <testcase name="testRefund_WithBudgetPool_RestoresBudget" classname="com.example.points.service.BudgetPointsEventTest" time="0.008"/>
-  <testcase name="testProcessEvent_BudgetExhausted_Throws" classname="com.example.points.service.BudgetPointsEventTest" time="0.006"/>
+  <testcase name="testBreach_TripsAndAudits" classname="com.example.points.service.ComprehensiveFixTest$RiskControlAutoFreezeTest" time="0.076"/>
+  <testcase name="testHighFrequencyBreach_CreatesFreezeOrder" classname="com.example.points.service.ComprehensiveFixTest$RiskControlAutoFreezeTest" time="0.023"/>
+  <testcase name="testNoBreach_NoFreezeOrder" classname="com.example.points.service.ComprehensiveFixTest$RiskControlAutoFreezeTest" time="0.005"/>
+  <testcase name="testManualClose_CorrectAuditBeforeValue" classname="com.example.points.service.ComprehensiveFixTest$CircuitBreakerRecoveryTest" time="0.003"/>
+  <testcase name="testRecovery_CasFailure_IsolatesException" classname="com.example.points.service.ComprehensiveFixTest$CircuitBreakerRecoveryTest" time="0.002"/>
+  <testcase name="testHalfOpen_InsufficientTests_DoesNotClose" classname="com.example.points.service.ComprehensiveFixTest$CircuitBreakerRecoveryTest" time="0.001"/>
+  <testcase name="testOpenToHalfOpen_LogsAudit" classname="com.example.points.service.ComprehensiveFixTest$CircuitBreakerRecoveryTest" time="0.002"/>
+  <testcase name="testManualOpen_CorrectAuditBeforeValue" classname="com.example.points.service.ComprehensiveFixTest$CircuitBreakerRecoveryTest" time="0.002"/>
+  <testcase name="testHalfOpenToClosed_LogsAudit" classname="com.example.points.service.ComprehensiveFixTest$CircuitBreakerRecoveryTest" time="0.006"/>
+  <testcase name="testRefund_NoBudgetPool_SkipsRelease" classname="com.example.points.service.ComprehensiveFixTest$PointsRefundBudgetTest" time="0.004"/>
+  <testcase name="testRefund_FlowRecordsBudgetPoolId" classname="com.example.points.service.ComprehensiveFixTest$PointsRefundBudgetTest" time="0.007"/>
+  <testcase name="testRefund_UsesReleaseBudget" classname="com.example.points.service.ComprehensiveFixTest$PointsRefundBudgetTest" time="0.006"/>
+  <testcase name="testRedeem_UsesReserveBudget" classname="com.example.points.service.ComprehensiveFixTest$BenefitRefundBudgetTest" time="0.011"/>
+  <testcase name="testRefundExchange_NoBudgetPool_SkipsRelease" classname="com.example.points.service.ComprehensiveFixTest$BenefitRefundBudgetTest" time="0.005"/>
+  <testcase name="testRefundExchange_FlowRecordsBudgetPoolId" classname="com.example.points.service.ComprehensiveFixTest$BenefitRefundBudgetTest" time="0.006"/>
+  <testcase name="testRefundExchange_UsesReleaseBudget" classname="com.example.points.service.ComprehensiveFixTest$BenefitRefundBudgetTest" time="0.006"/>
+  <testcase name="testRuleVersionChange_NoBudgetMismatch" classname="com.example.points.service.ComprehensiveFixTest$RuleVersioningTest" time="0.007"/>
+  <testcase name="testRuleVersionChange_BudgetMatchesNewPoints" classname="com.example.points.service.ComprehensiveFixTest$RuleVersioningTest" time="0.008"/>
+  <testcase name="testDuplicateRefund_NoDoubleBudgetRelease" classname="com.example.points.service.ComprehensiveFixTest$DuplicateEventIdTest" time="0.005"/>
+  <testcase name="testDuplicateEventId_InLockDoubleCheck" classname="com.example.points.service.ComprehensiveFixTest$DuplicateEventIdTest" time="0.005"/>
+  <testcase name="testDuplicateAdjust_NoDoubleOperation" classname="com.example.points.service.ComprehensiveFixTest$DuplicateEventIdTest" time="0.003"/>
+  <testcase name="testDuplicateEventId_PreLockCheck" classname="com.example.points.service.ComprehensiveFixTest$DuplicateEventIdTest" time="0.002"/>
+  <testcase name="testZeroPoints_NoBudgetReservation" classname="com.example.points.service.ComprehensiveFixTest$BudgetExhaustionTest" time="0.004"/>
+  <testcase name="testDailyCapExhausted_BlocksIssuance" classname="com.example.points.service.ComprehensiveFixTest$BudgetExhaustionTest" time="0.006"/>
+  <testcase name="testCircuitBreakerCheckInsideLock_PreventsRace" classname="com.example.points.service.ComprehensiveFixTest$ConcurrentIssuanceBudgetTest" time="0.005"/>
+  <testcase name="testConcurrentIssuance_LockContention_SecondRequestFails" classname="com.example.points.service.ComprehensiveFixTest$ConcurrentIssuanceBudgetTest" time="0.004"/>
+  <testcase name="testBudgetReservationFailure_NoPointsAdded" classname="com.example.points.service.ComprehensiveFixTest$ConcurrentIssuanceBudgetTest" time="0.003"/>
+  <testcase name="testBlacklistCheckInsideLock_PreventsRace" classname="com.example.points.service.ComprehensiveFixTest$ConcurrentIssuanceBudgetTest" time="0.004"/>
+  <testcase name="testBudgetReserveAndPointsAtomic" classname="com.example.points.service.ComprehensiveFixTest$ConcurrentIssuanceBudgetTest" time="0.009"/>
 </testsuite>

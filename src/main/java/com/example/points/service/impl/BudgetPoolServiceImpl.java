@@ -145,7 +145,7 @@ public class BudgetPoolServiceImpl implements BudgetPoolService {
     public void releaseBudget(Long poolId, long points) {
         int rows = budgetPoolMapper.releaseBudget(poolId, points);
         if (rows == 0) {
-            log.warn("Budget release returned 0 rows: poolId={}, points={}", poolId, points);
+            throw new BusinessException("预算池释放失败，池不存在: poolId=" + poolId);
         }
         log.debug("Budget released: poolId={}, points={}", poolId, points);
     }
@@ -163,7 +163,7 @@ public class BudgetPoolServiceImpl implements BudgetPoolService {
     public void restoreBudget(Long poolId, long points) {
         int rows = budgetPoolMapper.restoreBudget(poolId, points);
         if (rows == 0) {
-            log.warn("Budget restore returned 0 rows: poolId={}, points={}", poolId, points);
+            throw new BusinessException("预算池恢复失败，池不存在: poolId=" + poolId);
         }
         log.debug("Budget restored: poolId={}, points={}", poolId, points);
     }

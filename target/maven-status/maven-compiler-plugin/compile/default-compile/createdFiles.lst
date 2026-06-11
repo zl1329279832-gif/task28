@@ -90,7 +90,6 @@ com\example\points\enums\BudgetPoolStatus.class
 com\example\points\mapper\RiskFreezeOrderMapper.class
 com\example\points\config\MyBatisPlusConfig.class
 com\example\points\entity\RiskControlConfig$RiskControlConfigBuilder.class
-com\example\points\service\impl\PointsEventServiceImpl$1.class
 com\example\points\mapper\PointsFreezeMapper.class
 com\example\points\entity\ExchangeRecord.class
 com\example\points\entity\PointsAccount.class

@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 
 @Slf4j
@@ -30,6 +31,8 @@ public class RiskControlServiceImpl implements RiskControlService {
     private final BudgetPoolService budgetPoolService;
     private final BlacklistService blacklistService;
     private final ObjectMapper objectMapper;
+    private final RiskFreezeReviewService riskFreezeReviewService;
+    private final AuditLogService auditLogService;
 
     @Override
     public boolean isCircuitBreakerAllowing(Long budgetPoolId) {
@@ -68,27 +71,52 @@ public class RiskControlServiceImpl implements RiskControlService {
                .eq(RiskControlConfig::getEnabled, 1);
         List<RiskControlConfig> configs = riskControlConfigMapper.selectList(wrapper);
 
-        boolean anyBreached = false;
+        List<Long> breachedRiskEventIds = new ArrayList<>();
+        String breachedType = null;
 
         for (RiskControlConfig config : configs) {
             try {
-                boolean breached = evaluateRule(config, memberId, budgetPoolId, flowId, points);
-                if (breached) {
-                    anyBreached = true;
+                Long riskEventId = evaluateRule(config, memberId, budgetPoolId, flowId, points);
+                if (riskEventId != null) {
+                    breachedRiskEventIds.add(riskEventId);
+                    if (breachedType == null) {
+                        breachedType = config.getRuleType();
+                    }
                 }
             } catch (Exception e) {
                 log.error("Error evaluating risk rule {} for pool {}", config.getRuleType(), budgetPoolId, e);
             }
         }
 
-        if (anyBreached) {
+        if (!breachedRiskEventIds.isEmpty()) {
             // Trip the circuit breaker
             tripCircuitBreaker(budgetPoolId, configs);
+
+            // Auto-freeze the issued points and create review order
+            try {
+                int expireHours = configs.isEmpty() ? 72 :
+                        configs.get(0).getCooldownMinutes() > 0 ? configs.get(0).getCooldownMinutes() * 2 : 72;
+                riskFreezeReviewService.createRiskFreeze(
+                        memberId, budgetPoolId, breachedRiskEventIds.get(0),
+                        breachedType, points, Math.max(expireHours, 24));
+
+                auditLogService.log("RISK_CONTROL", "AUTO_FREEZE", String.valueOf(memberId),
+                        "MEMBER", String.valueOf(points), "FROZEN",
+                        "SYSTEM", "风控自动冻结，规则: " + breachedType);
+
+                log.info("Risk auto-freeze created: memberId={}, points={}, ruleType={}",
+                        memberId, points, breachedType);
+            } catch (Exception e) {
+                log.error("Failed to create risk freeze for memberId={}, poolId={}", memberId, budgetPoolId, e);
+            }
         }
     }
 
-    private boolean evaluateRule(RiskControlConfig config, Long memberId, Long poolId,
-                                  Long flowId, long points) {
+    /**
+     * Evaluates a single risk rule. Returns the riskEventId if breached, null otherwise.
+     */
+    private Long evaluateRule(RiskControlConfig config, Long memberId, Long poolId,
+                              Long flowId, long points) {
         String ruleType = config.getRuleType();
         switch (ruleType) {
             case "HIGH_FREQUENCY":
@@ -101,12 +129,12 @@ public class RiskControlServiceImpl implements RiskControlService {
                 return evaluateBudgetExhaustion(config, poolId, flowId);
             default:
                 log.warn("Unknown risk rule type: {}", ruleType);
-                return false;
+                return null;
         }
     }
 
-    private boolean evaluateHighFrequency(RiskControlConfig config, Long memberId,
-                                            Long poolId, Long flowId) {
+    private Long evaluateHighFrequency(RiskControlConfig config, Long memberId,
+                                        Long poolId, Long flowId) {
         try {
             JsonNode threshold = objectMapper.readTree(config.getThresholdValue());
             int maxClaims = threshold.get("maxClaims").asInt();
@@ -116,21 +144,21 @@ public class RiskControlServiceImpl implements RiskControlService {
             int claimCount = riskEventMapper.countMemberClaimsSince(memberId, since);
 
             if (claimCount > maxClaims) {
-                createRiskEvent(poolId, memberId, "HIGH_FREQUENCY", flowId,
+                Long riskEventId = createRiskEvent(poolId, memberId, "HIGH_FREQUENCY", flowId,
                         String.format("{\"claimCount\":%d,\"maxClaims\":%d,\"windowMinutes\":%d}",
                                 claimCount, maxClaims, windowMinutes));
                 log.warn("HIGH_FREQUENCY risk breached: memberId={}, claims={}, max={}",
                         memberId, claimCount, maxClaims);
-                return true;
+                return riskEventId;
             }
         } catch (Exception e) {
             log.error("Error evaluating HIGH_FREQUENCY rule", e);
         }
-        return false;
+        return null;
     }
 
-    private boolean evaluateAbnormalRefund(RiskControlConfig config, Long memberId,
-                                             Long poolId, Long flowId) {
+    private Long evaluateAbnormalRefund(RiskControlConfig config, Long memberId,
+                                         Long poolId, Long flowId) {
         try {
             JsonNode threshold = objectMapper.readTree(config.getThresholdValue());
             int maxRefundRatePercent = threshold.get("maxRefundRatePercent").asInt();
@@ -143,30 +171,30 @@ public class RiskControlServiceImpl implements RiskControlService {
             if (issuanceCount > 0) {
                 int refundRatePercent = (refundCount * 100) / issuanceCount;
                 if (refundRatePercent > maxRefundRatePercent) {
-                    createRiskEvent(poolId, memberId, "ABNORMAL_REFUND", flowId,
+                    Long riskEventId = createRiskEvent(poolId, memberId, "ABNORMAL_REFUND", flowId,
                             String.format("{\"refundCount\":%d,\"issuanceCount\":%d,\"ratePercent\":%d}",
                                     refundCount, issuanceCount, refundRatePercent));
                     log.warn("ABNORMAL_REFUND risk breached: memberId={}, rate={}%", memberId, refundRatePercent);
-                    return true;
+                    return riskEventId;
                 }
             }
         } catch (Exception e) {
             log.error("Error evaluating ABNORMAL_REFUND rule", e);
         }
-        return false;
+        return null;
     }
 
-    private boolean evaluateBlacklistHit(Long memberId, Long poolId, Long flowId) {
+    private Long evaluateBlacklistHit(Long memberId, Long poolId, Long flowId) {
         if (blacklistService.isBlacklisted(memberId)) {
-            createRiskEvent(poolId, memberId, "BLACKLIST_HIT", flowId,
+            Long riskEventId = createRiskEvent(poolId, memberId, "BLACKLIST_HIT", flowId,
                     "{\"memberId\":" + memberId + "}");
             log.warn("BLACKLIST_HIT risk breached: memberId={}", memberId);
-            return true;
+            return riskEventId;
         }
-        return false;
+        return null;
     }
 
-    private boolean evaluateBudgetExhaustion(RiskControlConfig config, Long poolId, Long flowId) {
+    private Long evaluateBudgetExhaustion(RiskControlConfig config, Long poolId, Long flowId) {
         try {
             JsonNode threshold = objectMapper.readTree(config.getThresholdValue());
             int usageThresholdPercent = threshold.get("usageThresholdPercent").asInt();
@@ -175,20 +203,20 @@ public class RiskControlServiceImpl implements RiskControlService {
             if (pool.getTotalBudget() > 0) {
                 int usagePercent = (int) ((pool.getUsedBudget() * 100) / pool.getTotalBudget());
                 if (usagePercent >= usageThresholdPercent) {
-                    createRiskEvent(poolId, null, "BUDGET_EXHAUSTION", flowId,
+                    Long riskEventId = createRiskEvent(poolId, null, "BUDGET_EXHAUSTION", flowId,
                             String.format("{\"usedBudget\":%d,\"totalBudget\":%d,\"usagePercent\":%d}",
                                     pool.getUsedBudget(), pool.getTotalBudget(), usagePercent));
                     log.warn("BUDGET_EXHAUSTION risk breached: poolId={}, usage={}% ", poolId, usagePercent);
-                    return true;
+                    return riskEventId;
                 }
             }
         } catch (Exception e) {
             log.error("Error evaluating BUDGET_EXHAUSTION rule", e);
         }
-        return false;
+        return null;
     }
 
-    private void createRiskEvent(Long poolId, Long memberId, String eventType,
+    private Long createRiskEvent(Long poolId, Long memberId, String eventType,
                                   Long flowId, String detail) {
         RiskEvent event = RiskEvent.builder()
                 .poolId(poolId)
@@ -200,6 +228,7 @@ public class RiskControlServiceImpl implements RiskControlService {
                 .createTime(LocalDateTime.now())
                 .build();
         riskEventMapper.insert(event);
+        return event.getId();
     }
 
     private void tripCircuitBreaker(Long poolId, List<RiskControlConfig> configs) {
@@ -223,9 +252,18 @@ public class RiskControlServiceImpl implements RiskControlService {
                     .updateTime(LocalDateTime.now())
                     .build();
             circuitBreakerMapper.insert(cb);
+
+            auditLogService.log("CIRCUIT_BREAKER", "AUTO_TRIP", String.valueOf(poolId),
+                    "BUDGET_POOL", null, "OPEN", "SYSTEM", null);
+
             log.info("Circuit breaker created and tripped: poolId={}", poolId);
         } else {
+            String previousStatus = cb.getStatus();
             circuitBreakerMapper.tripBreaker(poolId);
+
+            auditLogService.log("CIRCUIT_BREAKER", "AUTO_TRIP", String.valueOf(poolId),
+                    "BUDGET_POOL", previousStatus, "OPEN", "SYSTEM", null);
+
             log.info("Circuit breaker tripped: poolId={}", poolId);
         }
     }

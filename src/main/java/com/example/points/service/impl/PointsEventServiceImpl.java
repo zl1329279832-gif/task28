@@ -15,9 +15,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.concurrent.TimeUnit;
@@ -37,29 +35,27 @@ public class PointsEventServiceImpl implements PointsEventService {
     private final RedissonClient redissonClient;
     private final BudgetPoolService budgetPoolService;
     private final RiskControlService riskControlService;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public PointsFlow processEvent(PointsEventRequest request) {
-        // 1. Check blacklist
+        // 1. Fast-fail pre-checks (outside lock, optimistic)
         if (blacklistService.isBlacklisted(request.getMemberId())) {
             throw new BusinessException("会员已被加入黑名单");
         }
 
-        // 1.5 Circuit breaker pre-check
         if (request.getBudgetPoolId() != null
                 && !riskControlService.isCircuitBreakerAllowing(request.getBudgetPoolId())) {
             throw new BusinessException("熔断器已开启，积分发放被阻止");
         }
 
-        // 2. Idempotent check before lock
         PointsFlow existingFlow = flowService.checkIdempotent(request.getEventId());
         if (existingFlow != null) {
             log.info("Event already processed, eventId={}", request.getEventId());
             return existingFlow;
         }
 
-        // 3. Acquire distributed lock
+        // 2. Acquire distributed lock
         String lockKey = "lock:points:event:" + request.getMemberId();
         RLock lock = redissonClient.getLock(lockKey);
         try {
@@ -67,84 +63,91 @@ public class PointsEventServiceImpl implements PointsEventService {
                 throw new BusinessException("系统繁忙，请稍后重试");
             }
 
-            // 4. Double-check idempotent inside lock
-            existingFlow = flowService.checkIdempotent(request.getEventId());
-            if (existingFlow != null) {
-                return existingFlow;
+            // 3. Execute within transaction INSIDE lock (commit before unlock)
+            PointsFlow result = transactionTemplate.execute(status -> {
+                // Double-check idempotent inside lock+transaction
+                PointsFlow existing = flowService.checkIdempotent(request.getEventId());
+                if (existing != null) {
+                    return existing;
+                }
+
+                // Double-check blacklist inside lock (race: added between pre-check and lock)
+                if (blacklistService.isBlacklisted(request.getMemberId())) {
+                    throw new BusinessException("会员已被加入黑名单");
+                }
+
+                // Double-check circuit breaker inside lock
+                if (request.getBudgetPoolId() != null
+                        && !riskControlService.isCircuitBreakerAllowing(request.getBudgetPoolId())) {
+                    throw new BusinessException("熔断器已开启，积分发放被阻止");
+                }
+
+                // Get or create account
+                PointsAccount account = accountService.getOrCreateAccount(request.getMemberId());
+
+                // Calculate points via rule engine
+                long points = ruleEngine.calculatePoints(request, account);
+                if (points == 0) {
+                    log.info("No points calculated for eventId={}, memberId={}",
+                            request.getEventId(), request.getMemberId());
+                    return null;
+                }
+
+                // Reserve budget (before account update)
+                if (request.getBudgetPoolId() != null && points > 0) {
+                    budgetPoolService.reserveBudget(request.getBudgetPoolId(), points);
+                }
+
+                // Update account balance
+                int rows = accountMapper.addPoints(request.getMemberId(), points);
+                if (rows == 0) {
+                    throw new BusinessException("积分更新失败");
+                }
+
+                // Re-read account AFTER update for accurate flow values
+                PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
+                long afterPoints = updatedAccount.getAvailablePoints();
+                long beforePoints = afterPoints - points;
+
+                // Build and save flow record
+                PointsFlow flow = PointsFlow.builder()
+                        .memberId(request.getMemberId())
+                        .eventId(request.getEventId())
+                        .eventType(request.getEventType())
+                        .pointsChange(points)
+                        .beforePoints(beforePoints)
+                        .afterPoints(afterPoints)
+                        .bizOrderNo(request.getBizOrderNo())
+                        .expireTime(LocalDateTime.now().plusMonths(12))
+                        .remark(request.getRemark())
+                        .budgetPoolId(request.getBudgetPoolId())
+                        .createTime(LocalDateTime.now())
+                        .build();
+                flowService.saveFlow(flow);
+
+                // Audit log
+                auditLogService.log("POINTS", "EARN", String.valueOf(request.getMemberId()),
+                        "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
+                        "SYSTEM", null);
+
+                log.info("Points event processed: memberId={}, eventType={}, points={}, eventId={}",
+                        request.getMemberId(), request.getEventType(), points, request.getEventId());
+                return flow;
+            });
+
+            // 4. Post-commit risk evaluation (transaction committed, still holding lock)
+            if (result != null && request.getBudgetPoolId() != null) {
+                try {
+                    riskControlService.evaluatePostIssuance(
+                            request.getMemberId(), request.getBudgetPoolId(),
+                            result.getId(), result.getPointsChange());
+                } catch (Exception e) {
+                    log.error("Post-issuance risk evaluation failed, memberId={}, poolId={}",
+                            request.getMemberId(), request.getBudgetPoolId(), e);
+                }
             }
 
-            // 5. Get or create account
-            PointsAccount account = accountService.getOrCreateAccount(request.getMemberId());
-
-            // 6. Calculate points via rule engine
-            long points = ruleEngine.calculatePoints(request, account);
-            if (points == 0) {
-                log.info("No points calculated for eventId={}, memberId={}",
-                        request.getEventId(), request.getMemberId());
-                return null;
-            }
-
-            // 7. Reserve budget (before account update)
-            if (request.getBudgetPoolId() != null && points > 0) {
-                budgetPoolService.reserveBudget(request.getBudgetPoolId(), points);
-            }
-
-            // 8. Update account balance
-            int rows = accountMapper.addPoints(request.getMemberId(), points);
-            if (rows == 0) {
-                throw new BusinessException("积分更新失败");
-            }
-
-            // Re-read account AFTER update for accurate flow values
-            PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
-            long afterPoints = updatedAccount.getAvailablePoints();
-            long beforePoints = afterPoints - points;
-
-            // 8. Build and save flow record
-            PointsFlow flow = PointsFlow.builder()
-                    .memberId(request.getMemberId())
-                    .eventId(request.getEventId())
-                    .eventType(request.getEventType())
-                    .pointsChange(points)
-                    .beforePoints(beforePoints)
-                    .afterPoints(afterPoints)
-                    .bizOrderNo(request.getBizOrderNo())
-                    .expireTime(LocalDateTime.now().plusMonths(12))
-                    .remark(request.getRemark())
-                    .budgetPoolId(request.getBudgetPoolId())
-                    .createTime(LocalDateTime.now())
-                    .build();
-            flowService.saveFlow(flow);
-
-            // 9. Audit log
-            auditLogService.log("POINTS", "EARN", String.valueOf(request.getMemberId()),
-                    "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
-                    "SYSTEM", null);
-
-            // 10. Post-commit risk evaluation
-            final Long budgetPoolId = request.getBudgetPoolId();
-            final long earnedPoints = points;
-            if (budgetPoolId != null
-                    && TransactionSynchronizationManager.isSynchronizationActive()) {
-                TransactionSynchronizationManager.registerSynchronization(
-                        new TransactionSynchronization() {
-                            @Override
-                            public void afterCommit() {
-                                try {
-                                    riskControlService.evaluatePostIssuance(
-                                            request.getMemberId(), budgetPoolId,
-                                            flow.getId(), earnedPoints);
-                                } catch (Exception e) {
-                                    log.error("Post-issuance risk evaluation failed, memberId={}, poolId={}",
-                                            request.getMemberId(), budgetPoolId, e);
-                                }
-                            }
-                        });
-            }
-
-            log.info("Points event processed: memberId={}, eventType={}, points={}, eventId={}",
-                    request.getMemberId(), request.getEventType(), points, request.getEventId());
-            return flow;
+            return result;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("系统繁忙，请稍后重试");
@@ -156,7 +159,6 @@ public class PointsEventServiceImpl implements PointsEventService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public PointsFlow adjust(AdjustRequest request) {
         // 1. Acquire distributed lock FIRST
         String lockKey = "lock:points:adjust:" + request.getMemberId();
@@ -166,58 +168,61 @@ public class PointsEventServiceImpl implements PointsEventService {
                 throw new BusinessException("系统繁忙，请稍后重试");
             }
 
-            // 2. Idempotent check INSIDE lock (double-check pattern)
-            PointsFlow existingFlow = flowService.checkIdempotent(request.getEventId());
-            if (existingFlow != null) {
-                log.info("Adjust event already processed, eventId={}", request.getEventId());
-                return existingFlow;
-            }
-
-            // 3. Get account
-            PointsAccount account = accountService.getAccount(request.getMemberId());
-
-            long points = request.getPoints();
-            long absPoints = Math.abs(points);
-
-            // 4. Add or deduct points
-            if (points > 0) {
-                int rows = accountMapper.addPoints(request.getMemberId(), absPoints);
-                if (rows == 0) {
-                    throw new BusinessException("积分调整失败");
+            // 2. Execute within transaction INSIDE lock
+            return transactionTemplate.execute(status -> {
+                // Idempotent check INSIDE lock+transaction
+                PointsFlow existingFlow = flowService.checkIdempotent(request.getEventId());
+                if (existingFlow != null) {
+                    log.info("Adjust event already processed, eventId={}", request.getEventId());
+                    return existingFlow;
                 }
-            } else if (points < 0) {
-                int rows = accountMapper.deductPoints(request.getMemberId(), absPoints);
-                if (rows == 0) {
-                    throw new BusinessException("可用积分不足");
+
+                // Get account
+                PointsAccount account = accountService.getAccount(request.getMemberId());
+
+                long points = request.getPoints();
+                long absPoints = Math.abs(points);
+
+                // Add or deduct points
+                if (points > 0) {
+                    int rows = accountMapper.addPoints(request.getMemberId(), absPoints);
+                    if (rows == 0) {
+                        throw new BusinessException("积分调整失败");
+                    }
+                } else if (points < 0) {
+                    int rows = accountMapper.deductPoints(request.getMemberId(), absPoints);
+                    if (rows == 0) {
+                        throw new BusinessException("可用积分不足");
+                    }
                 }
-            }
 
-            // 5. Re-read account AFTER SQL for accurate flow values
-            PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
-            long afterPoints = updatedAccount.getAvailablePoints();
-            long beforePoints = afterPoints - points; // reverse-compute (works for both + and -)
+                // Re-read account AFTER SQL for accurate flow values
+                PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
+                long afterPoints = updatedAccount.getAvailablePoints();
+                long beforePoints = afterPoints - points;
 
-            // 6. Build and save flow
-            PointsFlow flow = PointsFlow.builder()
-                    .memberId(request.getMemberId())
-                    .eventId(request.getEventId())
-                    .eventType("ADJUST")
-                    .pointsChange(points)
-                    .beforePoints(beforePoints)
-                    .afterPoints(afterPoints)
-                    .remark(request.getReason())
-                    .createTime(LocalDateTime.now())
-                    .build();
-            flowService.saveFlow(flow);
+                // Build and save flow
+                PointsFlow flow = PointsFlow.builder()
+                        .memberId(request.getMemberId())
+                        .eventId(request.getEventId())
+                        .eventType("ADJUST")
+                        .pointsChange(points)
+                        .beforePoints(beforePoints)
+                        .afterPoints(afterPoints)
+                        .remark(request.getReason())
+                        .createTime(LocalDateTime.now())
+                        .build();
+                flowService.saveFlow(flow);
 
-            // 7. Audit log
-            auditLogService.log("POINTS", "ADJUST", String.valueOf(request.getMemberId()),
-                    "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
-                    request.getOperator(), "");
+                // Audit log
+                auditLogService.log("POINTS", "ADJUST", String.valueOf(request.getMemberId()),
+                        "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
+                        request.getOperator(), "");
 
-            log.info("Points adjusted: memberId={}, points={}, eventId={}",
-                    request.getMemberId(), points, request.getEventId());
-            return flow;
+                log.info("Points adjusted: memberId={}, points={}, eventId={}",
+                        request.getMemberId(), points, request.getEventId());
+                return flow;
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("系统繁忙，请稍后重试");
@@ -229,9 +234,8 @@ public class PointsEventServiceImpl implements PointsEventService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public PointsFlow refund(RefundRequest request) {
-        // 1. Idempotent check
+        // 1. Pre-check idempotent (fast-fail)
         PointsFlow existingFlow = flowService.checkIdempotent(request.getEventId());
         if (existingFlow != null) {
             log.info("Refund event already processed, eventId={}", request.getEventId());
@@ -254,18 +258,15 @@ public class PointsEventServiceImpl implements PointsEventService {
         long originalPoints = originalFlow.getPointsChange();
         long refundPoints;
         if (request.getRefundAmount() != null && request.getRefundAmount() > 0) {
-            // Partial refund: refundAmount is the number of points to return
-            // Cap at original points to prevent over-refund
             refundPoints = Math.min(request.getRefundAmount(), originalPoints);
         } else {
-            // Full refund
             refundPoints = originalPoints;
         }
         if (refundPoints <= 0) {
             throw new BusinessException("退款积分计算结果为0");
         }
 
-        // 3. Acquire lock
+        // 4. Acquire lock
         String lockKey = "lock:points:event:" + request.getMemberId();
         RLock lock = redissonClient.getLock(lockKey);
         try {
@@ -273,51 +274,56 @@ public class PointsEventServiceImpl implements PointsEventService {
                 throw new BusinessException("系统繁忙，请稍后重试");
             }
 
-            // Re-check idempotent
-            existingFlow = flowService.checkIdempotent(request.getEventId());
-            if (existingFlow != null) {
-                return existingFlow;
-            }
+            final long finalRefundPoints = refundPoints;
+            // 5. Execute within transaction INSIDE lock
+            return transactionTemplate.execute(status -> {
+                // Re-check idempotent inside lock+transaction
+                PointsFlow existing = flowService.checkIdempotent(request.getEventId());
+                if (existing != null) {
+                    return existing;
+                }
 
-            PointsAccount account = accountService.getAccount(request.getMemberId());
+                PointsAccount account = accountService.getAccount(request.getMemberId());
 
-            // 4. Return points to account
-            int rows = accountMapper.addPoints(request.getMemberId(), refundPoints);
-            if (rows == 0) {
-                throw new BusinessException("退款积分添加失败");
-            }
+                // Return points to account
+                int rows = accountMapper.addPoints(request.getMemberId(), finalRefundPoints);
+                if (rows == 0) {
+                    throw new BusinessException("退款积分添加失败");
+                }
 
-            // Re-read account AFTER update for accurate flow values
-            PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
-            long afterPoints = updatedAccount.getAvailablePoints();
-            long beforePoints = afterPoints - refundPoints;
+                // Restore budget to original pool (use releaseBudget to restore daily/monthly counters)
+                if (originalFlow.getBudgetPoolId() != null) {
+                    budgetPoolService.releaseBudget(originalFlow.getBudgetPoolId(), finalRefundPoints);
+                }
 
-            // 5. Build and save refund flow
-            PointsFlow flow = PointsFlow.builder()
-                    .memberId(request.getMemberId())
-                    .eventId(request.getEventId())
-                    .eventType("REFUND")
-                    .pointsChange(refundPoints)
-                    .beforePoints(beforePoints)
-                    .afterPoints(afterPoints)
-                    .bizOrderNo(request.getBizOrderNo())
-                    .remark("退款: " + request.getBizOrderNo())
-                    .createTime(LocalDateTime.now())
-                    .build();
-            flowService.saveFlow(flow);
+                // Re-read account AFTER update for accurate flow values
+                PointsAccount updatedAccount = accountMapper.selectByMemberId(request.getMemberId());
+                long afterPoints = updatedAccount.getAvailablePoints();
+                long beforePoints = afterPoints - finalRefundPoints;
 
-            auditLogService.log("POINTS", "REFUND", String.valueOf(request.getMemberId()),
-                    "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
-                    request.getOperator() != null ? request.getOperator() : "SYSTEM", null);
+                // Build and save refund flow (with budgetPoolId for audit traceability)
+                PointsFlow flow = PointsFlow.builder()
+                        .memberId(request.getMemberId())
+                        .eventId(request.getEventId())
+                        .eventType("REFUND")
+                        .pointsChange(finalRefundPoints)
+                        .beforePoints(beforePoints)
+                        .afterPoints(afterPoints)
+                        .bizOrderNo(request.getBizOrderNo())
+                        .budgetPoolId(originalFlow.getBudgetPoolId())
+                        .remark("退款: " + request.getBizOrderNo())
+                        .createTime(LocalDateTime.now())
+                        .build();
+                flowService.saveFlow(flow);
 
-            // Restore budget to original pool
-            if (originalFlow.getBudgetPoolId() != null) {
-                budgetPoolService.restoreBudget(originalFlow.getBudgetPoolId(), refundPoints);
-            }
+                auditLogService.log("POINTS", "REFUND", String.valueOf(request.getMemberId()),
+                        "MEMBER", String.valueOf(beforePoints), String.valueOf(afterPoints),
+                        request.getOperator() != null ? request.getOperator() : "SYSTEM", null);
 
-            log.info("Points refunded: memberId={}, refundPoints={}, bizOrderNo={}",
-                    request.getMemberId(), refundPoints, request.getBizOrderNo());
-            return flow;
+                log.info("Points refunded: memberId={}, refundPoints={}, bizOrderNo={}",
+                        request.getMemberId(), finalRefundPoints, request.getBizOrderNo());
+                return flow;
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("系统繁忙，请稍后重试");

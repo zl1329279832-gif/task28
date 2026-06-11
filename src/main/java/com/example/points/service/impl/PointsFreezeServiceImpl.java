@@ -19,7 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -37,16 +37,16 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
     private final AuditLogService auditLogService;
     private final PointsAccountService accountService;
     private final RedissonClient redissonClient;
+    private final TransactionTemplate transactionTemplate;
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public PointsFreeze freeze(FreezeRequest request) {
-        // 1. Check blacklist
+        // 1. Fast-fail blacklist check
         if (blacklistService.isBlacklisted(request.getMemberId())) {
             throw new BusinessException("会员已被加入黑名单，无法冻结积分");
         }
 
-        // 2. Check idempotent on freezeNo
+        // 2. Fast-fail idempotent check on freezeNo
         LambdaQueryWrapper<PointsFreeze> freezeWrapper = new LambdaQueryWrapper<>();
         freezeWrapper.eq(PointsFreeze::getFreezeNo, request.getFreezeNo());
         List<PointsFreeze> existingFreezes = pointsFreezeMapper.selectList(freezeWrapper);
@@ -63,61 +63,69 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 throw new BusinessException("获取锁失败，请稍后重试");
             }
 
-            // Re-check idempotent
-            existingFreezes = pointsFreezeMapper.selectList(freezeWrapper);
-            if (!existingFreezes.isEmpty()) {
-                return existingFreezes.get(0);
-            }
+            // 4. Execute within transaction INSIDE lock
+            return transactionTemplate.execute(status -> {
+                // Re-check idempotent inside lock+transaction
+                List<PointsFreeze> existing = pointsFreezeMapper.selectList(freezeWrapper);
+                if (!existing.isEmpty()) {
+                    return existing.get(0);
+                }
 
-            // Get account for existence check
-            PointsAccount account = accountService.getAccount(request.getMemberId());
+                // Re-check blacklist inside lock
+                if (blacklistService.isBlacklisted(request.getMemberId())) {
+                    throw new BusinessException("会员已被加入黑名单，无法冻结积分");
+                }
 
-            // 4. Freeze points
-            int rows = pointsAccountMapper.freezePoints(request.getMemberId(), request.getPoints());
-            if (rows == 0) {
-                throw new BusinessException("可用积分不足，无法冻结 " + request.getPoints() + " 积分");
-            }
+                // Get account for existence check
+                PointsAccount account = accountService.getAccount(request.getMemberId());
 
-            // Re-read account AFTER freezePoints for accurate flow values
-            PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(request.getMemberId());
-            long afterPoints = updatedAccount.getAvailablePoints();
-            long beforePoints = afterPoints + request.getPoints();
+                // Freeze points
+                int rows = pointsAccountMapper.freezePoints(request.getMemberId(), request.getPoints());
+                if (rows == 0) {
+                    throw new BusinessException("可用积分不足，无法冻结 " + request.getPoints() + " 积分");
+                }
 
-            // 5. Create PointsFreeze record
-            int freezeHours = request.getFreezeHours() != null ? request.getFreezeHours() : 72;
-            PointsFreeze freeze = PointsFreeze.builder()
-                    .memberId(request.getMemberId())
-                    .freezeNo(request.getFreezeNo())
-                    .points(request.getPoints())
-                    .bizOrderNo(request.getBizOrderNo())
-                    .reason(request.getReason())
-                    .status(FreezeStatus.FROZEN.getCode())
-                    .expireTime(LocalDateTime.now().plusHours(freezeHours))
-                    .createTime(LocalDateTime.now())
-                    .updateTime(LocalDateTime.now())
-                    .build();
-            pointsFreezeMapper.insert(freeze);
+                // Re-read account AFTER freezePoints for accurate flow values
+                PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(request.getMemberId());
+                long afterPoints = updatedAccount.getAvailablePoints();
+                long beforePoints = afterPoints + request.getPoints();
 
-            // 6. Create PointsFlow with eventType=FREEZE
-            PointsFlow flow = PointsFlow.builder()
-                    .memberId(request.getMemberId())
-                    .eventId("FREEZE_" + request.getFreezeNo())
-                    .eventType("FREEZE")
-                    .pointsChange(-request.getPoints())
-                    .beforePoints(beforePoints)
-                    .afterPoints(afterPoints)
-                    .bizOrderNo(request.getBizOrderNo())
-                    .remark("冻结积分，冻结单号: " + request.getFreezeNo())
-                    .createTime(LocalDateTime.now())
-                    .build();
-            pointsFlowService.saveFlow(flow);
+                // Create PointsFreeze record
+                int freezeHours = request.getFreezeHours() != null ? request.getFreezeHours() : 72;
+                PointsFreeze freeze = PointsFreeze.builder()
+                        .memberId(request.getMemberId())
+                        .freezeNo(request.getFreezeNo())
+                        .points(request.getPoints())
+                        .bizOrderNo(request.getBizOrderNo())
+                        .reason(request.getReason())
+                        .status(FreezeStatus.FROZEN.getCode())
+                        .expireTime(LocalDateTime.now().plusHours(freezeHours))
+                        .createTime(LocalDateTime.now())
+                        .updateTime(LocalDateTime.now())
+                        .build();
+                pointsFreezeMapper.insert(freeze);
 
-            auditLogService.log("POINTS", "FREEZE", String.valueOf(request.getMemberId()), "MEMBER",
-                    String.valueOf(beforePoints), String.valueOf(afterPoints), "SYSTEM", null);
+                // Create PointsFlow with eventType=FREEZE
+                PointsFlow flow = PointsFlow.builder()
+                        .memberId(request.getMemberId())
+                        .eventId("FREEZE_" + request.getFreezeNo())
+                        .eventType("FREEZE")
+                        .pointsChange(-request.getPoints())
+                        .beforePoints(beforePoints)
+                        .afterPoints(afterPoints)
+                        .bizOrderNo(request.getBizOrderNo())
+                        .remark("冻结积分，冻结单号: " + request.getFreezeNo())
+                        .createTime(LocalDateTime.now())
+                        .build();
+                pointsFlowService.saveFlow(flow);
 
-            log.info("Points frozen: memberId={}, points={}, freezeNo={}",
-                    request.getMemberId(), request.getPoints(), request.getFreezeNo());
-            return freeze;
+                auditLogService.log("POINTS", "FREEZE", String.valueOf(request.getMemberId()), "MEMBER",
+                        String.valueOf(beforePoints), String.valueOf(afterPoints), "SYSTEM", null);
+
+                log.info("Points frozen: memberId={}, points={}, freezeNo={}",
+                        request.getMemberId(), request.getPoints(), request.getFreezeNo());
+                return freeze;
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("冻结积分被中断");
@@ -129,7 +137,6 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void unfreeze(String freezeNo) {
         // 1. Find freeze record, check status == FROZEN
         PointsFreeze freeze = getFreezeByNo(freezeNo);
@@ -145,48 +152,52 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 throw new BusinessException("获取锁失败，请稍后重试");
             }
 
-            // Re-check status
-            freeze = getFreezeByNo(freezeNo);
-            if (freeze.getStatus() != FreezeStatus.FROZEN.getCode()) {
-                log.info("Freeze already processed, freezeNo={}, status={}", freezeNo, freeze.getStatus());
-                return;
-            }
+            // 3. Execute within transaction INSIDE lock
+            transactionTemplate.execute(status -> {
+                // Re-check status inside lock+transaction
+                PointsFreeze freshFreeze = getFreezeByNo(freezeNo);
+                if (freshFreeze.getStatus() != FreezeStatus.FROZEN.getCode()) {
+                    log.info("Freeze already processed, freezeNo={}, status={}", freezeNo, freshFreeze.getStatus());
+                    return null;
+                }
 
-            // 3. Unfreeze points
-            int rows = pointsAccountMapper.unfreezePoints(freeze.getMemberId(), freeze.getPoints());
-            if (rows == 0) {
-                throw new BusinessException("解冻积分失败");
-            }
+                // Unfreeze points
+                int rows = pointsAccountMapper.unfreezePoints(freshFreeze.getMemberId(), freshFreeze.getPoints());
+                if (rows == 0) {
+                    throw new BusinessException("解冻积分失败");
+                }
 
-            // Re-read account AFTER unfreezePoints for accurate flow values
-            PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(freeze.getMemberId());
-            long afterPoints = updatedAccount.getAvailablePoints();
-            long beforePoints = afterPoints - freeze.getPoints();
+                // Re-read account AFTER unfreezePoints for accurate flow values
+                PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(freshFreeze.getMemberId());
+                long afterPoints = updatedAccount.getAvailablePoints();
+                long beforePoints = afterPoints - freshFreeze.getPoints();
 
-            // 4. Update freeze status to UNFROZEN
-            freeze.setStatus(FreezeStatus.UNFROZEN.getCode());
-            freeze.setUpdateTime(LocalDateTime.now());
-            pointsFreezeMapper.updateById(freeze);
+                // Update freeze status to UNFROZEN
+                freshFreeze.setStatus(FreezeStatus.UNFROZEN.getCode());
+                freshFreeze.setUpdateTime(LocalDateTime.now());
+                pointsFreezeMapper.updateById(freshFreeze);
 
-            // 5. Create PointsFlow with eventType=UNFREEZE
-            PointsFlow flow = PointsFlow.builder()
-                    .memberId(freeze.getMemberId())
-                    .eventId("UNFREEZE_" + freezeNo)
-                    .eventType("UNFREEZE")
-                    .pointsChange(freeze.getPoints())
-                    .beforePoints(beforePoints)
-                    .afterPoints(afterPoints)
-                    .bizOrderNo(freeze.getBizOrderNo())
-                    .remark("解冻积分，冻结单号: " + freezeNo)
-                    .createTime(LocalDateTime.now())
-                    .build();
-            pointsFlowService.saveFlow(flow);
+                // Create PointsFlow with eventType=UNFREEZE
+                PointsFlow flow = PointsFlow.builder()
+                        .memberId(freshFreeze.getMemberId())
+                        .eventId("UNFREEZE_" + freezeNo)
+                        .eventType("UNFREEZE")
+                        .pointsChange(freshFreeze.getPoints())
+                        .beforePoints(beforePoints)
+                        .afterPoints(afterPoints)
+                        .bizOrderNo(freshFreeze.getBizOrderNo())
+                        .remark("解冻积分，冻结单号: " + freezeNo)
+                        .createTime(LocalDateTime.now())
+                        .build();
+                pointsFlowService.saveFlow(flow);
 
-            auditLogService.log("POINTS", "UNFREEZE", String.valueOf(freeze.getMemberId()), "MEMBER",
-                    String.valueOf(beforePoints), String.valueOf(afterPoints), "SYSTEM", null);
+                auditLogService.log("POINTS", "UNFREEZE", String.valueOf(freshFreeze.getMemberId()), "MEMBER",
+                        String.valueOf(beforePoints), String.valueOf(afterPoints), "SYSTEM", null);
 
-            log.info("Points unfrozen: memberId={}, points={}, freezeNo={}",
-                    freeze.getMemberId(), freeze.getPoints(), freezeNo);
+                log.info("Points unfrozen: memberId={}, points={}, freezeNo={}",
+                        freshFreeze.getMemberId(), freshFreeze.getPoints(), freezeNo);
+                return null;
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("解冻积分被中断");
@@ -198,7 +209,6 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
     }
 
     @Override
-    @Transactional(rollbackFor = Exception.class)
     public void settleFreeze(String freezeNo) {
         // 1. Find freeze record, check status == FROZEN
         PointsFreeze freeze = getFreezeByNo(freezeNo);
@@ -214,48 +224,52 @@ public class PointsFreezeServiceImpl implements PointsFreezeService {
                 throw new BusinessException("获取锁失败，请稍后重试");
             }
 
-            // Re-check status
-            freeze = getFreezeByNo(freezeNo);
-            if (freeze.getStatus() != FreezeStatus.FROZEN.getCode()) {
-                log.info("Freeze already processed, freezeNo={}, status={}", freezeNo, freeze.getStatus());
-                return;
-            }
+            // 3. Execute within transaction INSIDE lock
+            transactionTemplate.execute(status -> {
+                // Re-check status inside lock+transaction
+                PointsFreeze freshFreeze = getFreezeByNo(freezeNo);
+                if (freshFreeze.getStatus() != FreezeStatus.FROZEN.getCode()) {
+                    log.info("Freeze already processed, freezeNo={}, status={}", freezeNo, freshFreeze.getStatus());
+                    return null;
+                }
 
-            // 3. Deduct frozen points (order confirmed)
-            int rows = pointsAccountMapper.deductFrozenPoints(freeze.getMemberId(), freeze.getPoints());
-            if (rows == 0) {
-                throw new BusinessException("扣减冻结积分失败");
-            }
+                // Deduct frozen points (order confirmed)
+                int rows = pointsAccountMapper.deductFrozenPoints(freshFreeze.getMemberId(), freshFreeze.getPoints());
+                if (rows == 0) {
+                    throw new BusinessException("扣减冻结积分失败");
+                }
 
-            // Re-read account AFTER deductFrozenPoints for accurate flow values
-            PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(freeze.getMemberId());
-            long afterFrozen = updatedAccount.getFrozenPoints();
-            long beforeFrozen = afterFrozen + freeze.getPoints();
+                // Re-read account AFTER deductFrozenPoints for accurate flow values
+                PointsAccount updatedAccount = pointsAccountMapper.selectByMemberId(freshFreeze.getMemberId());
+                long afterFrozen = updatedAccount.getFrozenPoints();
+                long beforeFrozen = afterFrozen + freshFreeze.getPoints();
 
-            // 4. Update freeze status to DEDUCTED
-            freeze.setStatus(FreezeStatus.DEDUCTED.getCode());
-            freeze.setUpdateTime(LocalDateTime.now());
-            pointsFreezeMapper.updateById(freeze);
+                // Update freeze status to DEDUCTED
+                freshFreeze.setStatus(FreezeStatus.DEDUCTED.getCode());
+                freshFreeze.setUpdateTime(LocalDateTime.now());
+                pointsFreezeMapper.updateById(freshFreeze);
 
-            // 5. Create PointsFlow with eventType=REDEEM
-            PointsFlow flow = PointsFlow.builder()
-                    .memberId(freeze.getMemberId())
-                    .eventId("SETTLE_" + freezeNo)
-                    .eventType("REDEEM")
-                    .pointsChange(-freeze.getPoints())
-                    .beforePoints(beforeFrozen)
-                    .afterPoints(afterFrozen)
-                    .bizOrderNo(freeze.getBizOrderNo())
-                    .remark("结算冻结积分，冻结单号: " + freezeNo)
-                    .createTime(LocalDateTime.now())
-                    .build();
-            pointsFlowService.saveFlow(flow);
+                // Create PointsFlow with eventType=REDEEM
+                PointsFlow flow = PointsFlow.builder()
+                        .memberId(freshFreeze.getMemberId())
+                        .eventId("SETTLE_" + freezeNo)
+                        .eventType("REDEEM")
+                        .pointsChange(-freshFreeze.getPoints())
+                        .beforePoints(beforeFrozen)
+                        .afterPoints(afterFrozen)
+                        .bizOrderNo(freshFreeze.getBizOrderNo())
+                        .remark("结算冻结积分，冻结单号: " + freezeNo)
+                        .createTime(LocalDateTime.now())
+                        .build();
+                pointsFlowService.saveFlow(flow);
 
-            auditLogService.log("POINTS", "SETTLE_FREEZE", String.valueOf(freeze.getMemberId()), "MEMBER",
-                    String.valueOf(beforeFrozen), String.valueOf(afterFrozen), "SYSTEM", null);
+                auditLogService.log("POINTS", "SETTLE_FREEZE", String.valueOf(freshFreeze.getMemberId()), "MEMBER",
+                        String.valueOf(beforeFrozen), String.valueOf(afterFrozen), "SYSTEM", null);
 
-            log.info("Freeze settled: memberId={}, points={}, freezeNo={}",
-                    freeze.getMemberId(), freeze.getPoints(), freezeNo);
+                log.info("Freeze settled: memberId={}, points={}, freezeNo={}",
+                        freshFreeze.getMemberId(), freshFreeze.getPoints(), freezeNo);
+                return null;
+            });
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new BusinessException("结算冻结积分被中断");

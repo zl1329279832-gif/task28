@@ -18,6 +18,8 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.LocalDateTime;
 import java.util.Collections;
@@ -42,11 +44,16 @@ class PointsFreezeServiceTest {
     @Mock private PointsAccountService accountService;
     @Mock private RedissonClient redissonClient;
     @Mock private RLock rLock;
+    @Mock private TransactionTemplate transactionTemplate;
 
     @BeforeEach
     void setUp() throws Exception {
         lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
         lenient().when(rLock.tryLock(anyLong(), anyLong(), any(TimeUnit.class))).thenReturn(true);
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
     }
 
     // --- freeze() tests ---

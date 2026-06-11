@@ -20,6 +20,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.redisson.api.RBucket;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.*;
@@ -39,6 +41,9 @@ class PointsEventServiceTest {
     @Mock private BlacklistService blacklistService;
     @Mock private AuditLogService auditLogService;
     @Mock private RedissonClient redissonClient;
+    @Mock private BudgetPoolService budgetPoolService;
+    @Mock private RiskControlService riskControlService;
+    @Mock private TransactionTemplate transactionTemplate;
     @Mock private RLock rLock;
     @Mock private RBucket<Object> rBucket;
 
@@ -48,6 +53,11 @@ class PointsEventServiceTest {
         lenient().when(redissonClient.getLock(anyString())).thenReturn(rLock);
         lenient().when(rLock.tryLock(anyLong(), anyLong(), any())).thenReturn(true);
         lenient().when(redissonClient.getBucket(anyString())).thenReturn(rBucket);
+        // TransactionTemplate: execute the callback directly
+        lenient().when(transactionTemplate.execute(any())).thenAnswer(invocation -> {
+            TransactionCallback<?> callback = invocation.getArgument(0);
+            return callback.doInTransaction(null);
+        });
     }
 
     @Test

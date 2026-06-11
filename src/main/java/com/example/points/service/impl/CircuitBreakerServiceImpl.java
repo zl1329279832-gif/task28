@@ -9,6 +9,7 @@ import com.example.points.service.CircuitBreakerService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -27,13 +28,16 @@ public class CircuitBreakerServiceImpl implements CircuitBreakerService {
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void manualClose(Long poolId, String operator) {
         CircuitBreaker cb = getByPoolId(poolId);
         if (cb == null) {
             throw new BusinessException("熔断器不存在: poolId=" + poolId);
         }
 
-        int rows = circuitBreakerMapper.casTransition(cb.getId(), cb.getStatus(),
+        String previousStatus = cb.getStatus();
+
+        int rows = circuitBreakerMapper.casTransition(cb.getId(), previousStatus,
                 CircuitBreakerStatus.CLOSED.name());
         if (rows == 0) {
             throw new BusinessException("熔断器状态变更失败");
@@ -47,26 +51,29 @@ public class CircuitBreakerServiceImpl implements CircuitBreakerService {
         circuitBreakerMapper.updateById(cb);
 
         auditLogService.log("CIRCUIT_BREAKER", "MANUAL_CLOSE", String.valueOf(poolId),
-                "BUDGET_POOL", cb.getStatus(), "CLOSED", operator, null);
+                "BUDGET_POOL", previousStatus, "CLOSED", operator, null);
 
         log.info("Circuit breaker manually closed: poolId={}, operator={}", poolId, operator);
     }
 
     @Override
+    @Transactional(rollbackFor = Exception.class)
     public void manualOpen(Long poolId, String operator) {
         CircuitBreaker cb = getByPoolId(poolId);
         if (cb == null) {
             throw new BusinessException("熔断器不存在: poolId=" + poolId);
         }
 
-        int rows = circuitBreakerMapper.casTransition(cb.getId(), cb.getStatus(),
+        String previousStatus = cb.getStatus();
+
+        int rows = circuitBreakerMapper.casTransition(cb.getId(), previousStatus,
                 CircuitBreakerStatus.OPEN.name());
         if (rows == 0) {
             throw new BusinessException("熔断器状态变更失败");
         }
 
         auditLogService.log("CIRCUIT_BREAKER", "MANUAL_OPEN", String.valueOf(poolId),
-                "BUDGET_POOL", cb.getStatus(), "OPEN", operator, null);
+                "BUDGET_POOL", previousStatus, "OPEN", operator, null);
 
         log.info("Circuit breaker manually opened: poolId={}, operator={}", poolId, operator);
     }
@@ -80,6 +87,8 @@ public class CircuitBreakerServiceImpl implements CircuitBreakerService {
                 int rows = circuitBreakerMapper.casTransition(cb.getId(),
                         CircuitBreakerStatus.OPEN.name(), CircuitBreakerStatus.HALF_OPEN.name());
                 if (rows > 0) {
+                    auditLogService.log("CIRCUIT_BREAKER", "AUTO_RECOVERY", String.valueOf(cb.getPoolId()),
+                            "BUDGET_POOL", "OPEN", "HALF_OPEN", "SYSTEM", null);
                     log.info("Circuit breaker OPEN -> HALF_OPEN: poolId={}", cb.getPoolId());
                 }
             } catch (Exception e) {
@@ -98,6 +107,8 @@ public class CircuitBreakerServiceImpl implements CircuitBreakerService {
                 if (cb.getHalfOpenCount() >= cb.getMaxTestRequests()) {
                     int rows = circuitBreakerMapper.closeFromHalfOpen(cb.getPoolId());
                     if (rows > 0) {
+                        auditLogService.log("CIRCUIT_BREAKER", "AUTO_CLOSE", String.valueOf(cb.getPoolId()),
+                                "BUDGET_POOL", "HALF_OPEN", "CLOSED", "SYSTEM", null);
                         log.info("Circuit breaker HALF_OPEN -> CLOSED: poolId={}", cb.getPoolId());
                     }
                 }
